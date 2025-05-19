@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import pgx  # type: ignore
 from pgx._src.struct import dataclass  # type: ignore
 
-from type_aliases import Array, PRNGKey
+from pgx._src.types import Array, PRNGKey
 
 ENV_ID = "deep_sea"
 
