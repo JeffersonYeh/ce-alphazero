@@ -13,8 +13,9 @@ class Node:
     id: int
     state: pgx.State
     visit_count: jnp.ndarray = field(init=False)
-    parent: Optional[int] = None
+    parent: Optional['Node'] = None
     children: List[Optional['Node']] = field(init=False)
+    recent_action: Optional[jnp.ndarray] = None
 
     def __post_init__(self):
         n_actions = len(self.state.legal_action_mask)
@@ -79,10 +80,9 @@ class Cemcts:
             new_node = Node(
                 id=hash_state(new_state),
                 state=new_state,
-                parent=node.id
+                parent=node
             )
             node.children[action] = new_node
-            # self.tree[new_node.id] = new_node
             return new_node
         else:
             return node.children[action]
@@ -116,4 +116,10 @@ class Cemcts:
 
 
     def expand(self, node: Node, best_action: Array) -> None:
+        new_node = self.f(node=node, action=best_action)
+
+
+    def backup(self, node: Node, nu: Array, var_nu: Array):
+        previous_node = node.parent
+
         pass
