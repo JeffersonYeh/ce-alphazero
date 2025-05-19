@@ -38,11 +38,16 @@ def safety_critic_dummy(observation: jnp.ndarray, legal_action_mask: jnp.ndarray
     return legal_action_mask
 
 
-def sample_action(key: jax.random.PRNGKey, scores: jnp.ndarray) -> Array:
-    # Ensure all scores are positive or shift to be positive if needed
-    shifted_scores = scores - jnp.min(scores) # + 1e-8
-    probs = shifted_scores / jnp.sum(shifted_scores)
-    return random.choice(key, a=len(scores), p=probs)
+def sample_action(visit_count: jnp.ndarray, key: jax.random.PRNGKey) -> Array:
+    total = jnp.sum(visit_count)
+    probs = jax.lax.cond(
+        total > 0,
+        lambda _: visit_count / total,
+        lambda _: jnp.ones_like(visit_count) / len(visit_count),
+        operand=None,
+    )
+    return random.choice(key, a=len(visit_count), p=probs)
+
 
 class Cemcts:
     def __init__(
@@ -89,8 +94,7 @@ class Cemcts:
         for _ in range(self.budget):
             self.select(root, self.beta)
 
-        stricter_legal_mask = self.safety_critic(root.state.observation, root.state.legal_action_mask)
-        jnp.sum(root.visit_count)
+        return sample_action(root.visit_count, key)
 
     def select(self, node, beta):
         stricter_legal_mask = self.safety_critic(node.state.observation, node.state.legal_action_mask) # Safety critic
