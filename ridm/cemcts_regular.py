@@ -16,13 +16,27 @@ class Node:
     parent: Optional['Node'] = None
     children: List[Optional['Node']] = field(init=False)
     recent_action: Optional[jnp.ndarray] = None
+    q_values: jnp.ndarray = field(init=False)
+
 
     def __post_init__(self):
         n_actions = len(self.state.legal_action_mask)
         self.visit_count = jnp.zeros(n_actions, dtype=jnp.int32)
         self.children = [None] * n_actions
+        self.q_values = jnp.zeros(n_actions, dtype=jnp.float32)
 
 epsilon = jnp.array(1e-8, dtype=jnp.float32)
+
+def value_function_dummy(node: Node) -> (jnp.ndarray, jnp.ndarray): # V hat
+    mu = jnp.array(1.0, dtype=jnp.float32)
+    sigma = jnp.array(1.0, dtype=jnp.float32)
+    return (mu, sigma)
+
+def reward_function_dummy(node: Node) -> (jnp.ndarray, jnp.ndarray): # R hat
+    mu = jnp.array(2.0, dtype=jnp.float32)
+    sigma = jnp.array(2.0, dtype=jnp.float32)
+    return (mu, sigma)
+
 
 def hash_state(state: pgx.State) -> int:
     # Naive hash for immutable JAX state — replace with better fingerprinting if needed
@@ -58,6 +72,8 @@ class Cemcts:
         reward_fn: Callable[[Any, int], float],     # R̂
         uncertainty_fn: Callable[[Any], float],     # V[V̂], V[R̂]
         safety_critic: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray], # (observation, legal_mask) -> stricter_legal_mask
+        value_function: Callable[[Node], Tuple[jnp.ndarray, jnp.ndarray]], # V hat
+        reward_function: Callable[[Node], Tuple[jnp.ndarray, jnp.ndarray]], # R hat
         gamma: float = 1.0,
         c_uct: float = 1.0,
         beta: float = 0.0,
@@ -68,6 +84,8 @@ class Cemcts:
         self.reward_fn = reward_fn
         self.uncertainty_fn = uncertainty_fn
         self.safety_critic = safety_critic
+        self.value_function = value_function
+        self.reward_function = reward_function
         self.gamma = gamma
         self.c_uct = c_uct
         self.beta = beta
@@ -86,6 +104,10 @@ class Cemcts:
             return new_node
         else:
             return node.children[action]
+
+    def nu(self, node: Node, action: Array) -> Array:
+        new_node = node.children[action]
+
 
     def emcts(self, state: pgx.State, key: jax.random.PRNGKey) -> Array:
         # tree = {}  # Dict[state_hash] = Node
@@ -117,6 +139,10 @@ class Cemcts:
 
     def expand(self, node: Node, best_action: Array) -> None:
         new_node = self.f(node=node, action=best_action)
+        value_mu, value_sigma = self.value_function(new_node)
+        reward_mu, reward_sigma = self.reward_function(new_node)
+
+        node.recent_action = best_action
 
 
     def backup(self, node: Node, nu: Array, var_nu: Array):
