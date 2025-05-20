@@ -17,6 +17,8 @@ class Node:
     children: List[Optional['Node']] = field(init=False)
     recent_action: Optional[jnp.ndarray] = None
     q_values: jnp.ndarray = field(init=False)
+    variance_r_hat: Optional[jnp.ndarray] = field(default=None)
+    variance_v_hat: Optional[jnp.ndarray] = field(default=None)
 
 
     def __post_init__(self):
@@ -29,13 +31,13 @@ epsilon = jnp.array(1e-8, dtype=jnp.float32)
 
 def value_function_dummy(node: Node) -> (jnp.ndarray, jnp.ndarray): # V hat
     mu = jnp.array(1.0, dtype=jnp.float32)
-    sigma = jnp.array(1.0, dtype=jnp.float32)
-    return (mu, sigma)
+    variance = jnp.array(1.0, dtype=jnp.float32)
+    return (mu, variance)
 
 def reward_function_dummy(node: Node) -> (jnp.ndarray, jnp.ndarray): # R hat
     mu = jnp.array(2.0, dtype=jnp.float32)
-    sigma = jnp.array(2.0, dtype=jnp.float32)
-    return (mu, sigma)
+    variance = jnp.array(2.0, dtype=jnp.float32)
+    return (mu, variance)
 
 
 def hash_state(state: pgx.State) -> int:
@@ -74,7 +76,7 @@ class Cemcts:
         safety_critic: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray], # (observation, legal_mask) -> stricter_legal_mask
         value_function: Callable[[Node], Tuple[jnp.ndarray, jnp.ndarray]], # V hat
         reward_function: Callable[[Node], Tuple[jnp.ndarray, jnp.ndarray]], # R hat
-        gamma: float = 1.0,
+        gamma: jnp.ndarray = jnp.array([0.999]),
         c_uct: float = 1.0,
         beta: float = 0.0,
         budget: int = 100,
@@ -95,6 +97,7 @@ class Cemcts:
     def f(self, node: Node, action: Array) -> Node:
         if node.children[action] is None:
             new_state = self.env.step(node.state, action)
+            node.recent_action = action
             new_node = Node(
                 id=hash_state(new_state),
                 state=new_state,
@@ -105,8 +108,43 @@ class Cemcts:
         else:
             return node.children[action]
 
-    def nu(self, node: Node, action: Array) -> Array:
-        new_node = node.children[action]
+    def nu(self, node: Node, action: Array, key) -> (Array, Array):
+        current = node
+        result = jnp.array([0])
+        j = jnp.array([0])
+        while True:
+            result += jnp.power(self.gamma, j) * current.state.rewards
+            j += 1
+            child = current.children[action]
+            if child is None:  # Rollout from here
+                result += self.rollout(current, key)
+
+
+
+    def rollout(self, node: Node, key) -> Array: # Return (mu, variance)
+        rewards = []
+        current_state = node.state
+        while True:
+            stricter_legal_mask = self.safety_critic(current_state.observation, current_state.legal_action_mask)
+            if jnp.all(~stricter_legal_mask):
+                break
+            true_indices = jnp.where(stricter_legal_mask)[0]  # Shape: (num_true,)
+            rand_idx = jax.random.randint(key, (), 0, true_indices.shape[0])
+            uniform_random_action = true_indices[rand_idx]
+            new_state = self.env.step(current_state, uniform_random_action)
+            rewards.append(new_state.rewards)
+            terminated_all = bool(jnp.all(new_state.terminated))
+            truncated_all = bool(jnp.all(new_state.truncated))  # if it's a JAX array
+
+            if terminated_all or truncated_all:
+                break
+            else:
+                current_state = new_state
+        reward_array = jnp.stack(rewards)
+        mean = jnp.mean(reward_array, axis=0)
+        # variance = jnp.var(reward_array, axis=0)
+        return mean
+
 
 
     def emcts(self, state: pgx.State, key: jax.random.PRNGKey) -> Array:
@@ -118,7 +156,7 @@ class Cemcts:
 
         return sample_action(root.visit_count, key)
 
-    def select(self, node, beta):
+    def select(self, node, beta, key: jax.random.PRNGKey):
         stricter_legal_mask = self.safety_critic(node.state.observation, node.state.legal_action_mask) # Safety critic
         num_actions = stricter_legal_mask.shape[0]
         scores = jnp.zeros(num_actions, dtype=jnp.float32)
@@ -132,20 +170,24 @@ class Cemcts:
         best_action = jnp.argmax(scores)
 
         if node.children[best_action] is None:
-            self.expand(node, best_action)
+            self.expand(node, best_action, key)
         else:
-            self.select(self.f(node, best_action), beta)
+            self.select(self.f(node, best_action), beta, key)
 
 
-    def expand(self, node: Node, best_action: Array) -> None:
+    def expand(self, node: Node, best_action: Array, key: jax.random.PRNGKey) -> None:
         new_node = self.f(node=node, action=best_action)
-        value_mu, value_sigma = self.value_function(new_node)
-        reward_mu, reward_sigma = self.reward_function(new_node)
+        value_mu, value_var = self.value_function(new_node)
+        reward_mu, reward_var = self.reward_function(new_node)
+        new_node.variance_r_hat = reward_var
+        new_node.variance_v_hat = value_var
+
 
         node.recent_action = best_action
 
 
-    def backup(self, node: Node, nu: Array, var_nu: Array):
+    def backup(self, node: Node, v_hat: Array, v_hat_var: Array, key: jax.random.PRNGKey) -> None:
         previous_node = node.parent
-
+        previous_action = previous_node.recent_action
+        nu_value = self.nu(previous_node, previous_action, key)
         pass
