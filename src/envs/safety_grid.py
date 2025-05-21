@@ -1,0 +1,177 @@
+import chex
+import jax
+import jax.numpy as jnp
+import pgx  # type: ignore
+from pgx._src.struct import dataclass  # type: ignore
+
+from type_aliases import Array, PRNGKey
+from typing import Literal
+
+ENV_ID = "safety_grid"
+
+MAP_SIZE = jnp.int32(4) # MAP_SIZE**2 must be divisible by 4 due to hashing function used
+REWARD_MAP = jnp.float32([[0, 0, 0,  0], 
+                          [0, 0, 0,  0],
+                          [0, 0, 0,  0],
+                          [0, 0, 0, 10]])
+
+REWARD_LOC = jnp.square(MAP_SIZE)-1
+
+COST_MAP = jnp.float32([[0, 0, 0, 0], 
+                        [0, 0, 1, 0],
+                        [0, 0, 0, 0],
+                        [1, 0, 0, 0]])
+
+# REWARD_MAP = {(3, 3) : jnp.float32(10.0)}
+# COST_MAP = {(3, 1) : jnp.float32(1), 
+#             (1, 2) : jnp.float32(1), 
+#             # (3, 3) : jnp.float32(1),
+#             }
+COST_CAP = jnp.int32(0)
+
+
+@dataclass
+class SafetyGridState(pgx.State):
+
+    current_player: Array = jnp.int32(0) #single player
+    observation: Array = jnp.zeros(0, dtype=jnp.bool)  # The shape depends on the size of the grid. (only true at position of agent)
+    
+    rewards: Array = jnp.float32([0.0])
+    terminated: Array = jnp.bool(False)
+    truncated: Array = jnp.bool(False)
+    legal_action_mask: Array = jnp.ones(4, dtype=jnp.bool) # actions are U=0, D=1, L=2, R=3
+    costs: Array = jnp.float32(0.0)
+    
+
+
+    _step_count: Array = jnp.int32(0)  # how many steps have been taken
+    _position: Array = jnp.int32([0, 0])  # shape=(2,) - (x, y) start at (0, 0)
+    _cum_costs: Array = jnp.float32(0.0)
+
+    @property
+    def env_id(self) -> pgx.EnvId:
+        """Environment id = safety_grid"""
+        return ENV_ID  # type: ignore
+
+
+
+class SafetyGrid(pgx.Env):
+    def __init__(self, grid_size=MAP_SIZE, reward_map=REWARD_MAP, cost_map=COST_MAP, cost_cap = COST_CAP, reward_loc=REWARD_LOC, max_steps=40):
+        self.grid_size = grid_size
+        self.max_steps = max_steps
+        self.reward_map = reward_map
+        self.reward_loc = reward_loc 
+        self.cost_map = cost_map 
+        self.cost_cap = cost_cap
+
+    @property
+    def id(self) -> pgx.EnvId:
+        """Environment id."""
+        return ENV_ID  # type: ignore
+
+    @property
+    def version(self) -> str:
+        """Environment version. Updated when behavior, parameter, or API is changed.
+        Refactoring or speeding up without any expected behavior changes will NOT update the version number.
+        """
+        return "0.0.1"
+
+    @property
+    def num_players(self) -> int:
+        """Number of players (e.g., 2 in Tic-tac-toe)"""
+        return 1
+    
+
+    
+    def _init(self, key: PRNGKey) -> SafetyGridState:
+        observation = jnp.zeros([self.grid_size, self.grid_size], dtype=jnp.bool)
+        observation = observation.at[..., 0, 0].set(True)  # Initial location is in the top-left.
+        return SafetyGridState(observation=observation)
+    
+    def move(self, position: Array, direction: Literal['U', 'D', 'L', 'R', 'N']):
+        
+        if direction == 'U':
+            position = position.at[1].set(jnp.maximum(position[1] - 1, 0))
+        elif direction == 'D':
+            position = position.at[1].set(jnp.minimum(position[1] + 1, self.grid_size-1))
+        elif direction == 'L':
+            position = position.at[0].set(jnp.maximum(position[0] - 1, 0))
+        elif direction == 'R':
+            position = position.at[0].set(jnp.minimum(position[0] + 1, self.grid_size-1))
+        else:
+            pass
+
+        return position
+    
+    def move_down(self, position: Array):
+        position[1] = jnp.maximum(position[1] - 1, 0)
+
+        return position
+    
+
+
+    def _step(self, state: SafetyGridState, action: Array, key: PRNGKey) -> SafetyGridState:
+        assert isinstance(state, SafetyGridState)
+        assert action.ndim == 0 #check action is a number =>  U=0, D=1, L=2, R=3
+
+        # update position
+        new_position = state._position
+
+        new_position = jax.lax.cond(action == 0, 
+                                    lambda pos: self.move(pos, 'U'),
+                                    lambda pos: self.move(pos, 'N'),
+                                    operand = new_position
+                                   )
+        
+        new_position = jax.lax.cond(action == 1, 
+                                    lambda pos: self.move(pos, 'D'),
+                                    lambda pos: self.move(pos, 'N'),
+                                    operand = new_position
+                                   )
+        
+        new_position = jax.lax.cond(action == 2, 
+                                    lambda pos: self.move(pos, 'L'),
+                                    lambda pos: self.move(pos, 'N'),
+                                    operand = new_position
+                                   )
+        
+        new_position = jax.lax.cond(action == 3, 
+                                    lambda pos: self.move(pos, 'R'),
+                                    lambda pos: self.move(pos, 'N'),
+                                    operand = new_position
+                                   )
+
+        # update observation
+        new_observation = jnp.zeros_like(state.observation)
+        new_observation = new_observation.at[..., new_position[0], new_position[1]].set(True)  # Initial location is in the top-left.
+
+        pos_flat_idx = jnp.argmax(new_observation)
+        pos_r, pos_c = jnp.unravel_index(pos_flat_idx, new_observation.shape)
+
+        # update reward
+        new_rewards = jnp.expand_dims(self.reward_map[pos_r, pos_c], axis=0)
+
+        # update cost
+        new_costs = self.cost_map[pos_r, pos_c]
+
+        # update cum cost
+        new_cum_costs = state._cum_costs + new_costs
+
+        # update termination
+        # new_terminated = jnp.bool((state._step_count >= self.max_steps) or (new_cum_costs > self.cost_cap))
+        new_terminated = (state._step_count >= self.max_steps) | (new_cum_costs > self.cost_cap) | (pos_flat_idx == self.reward_loc)
+
+        return state.replace(  # type: ignore
+            observation = new_observation, 
+            _position = new_position, 
+            rewards = new_rewards, 
+            terminated = new_terminated,
+            costs = new_costs,
+            _cum_costs = new_cum_costs
+        )
+
+
+    def _observe(self, state: pgx.State, player_id: Array) -> Array:
+        assert isinstance(state, SafetyGridState)
+        return state.observation
+    
