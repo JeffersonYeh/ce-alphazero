@@ -12,3 +12,4 @@ __pycache__/
 baselines
 checkpoints
 wandb
+evaluation_results

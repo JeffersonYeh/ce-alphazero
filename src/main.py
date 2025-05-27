@@ -20,6 +20,7 @@ from flashbax.vault import Vault
 from config import Config, setup_config
 from context import Context, get_epistemic_recurrent_fn, get_forward_fn
 from envs.deep_sea import DeepSea
+from envs.safety_freeway import SafetyMinAtarFreeway
 from envs.subleq import Subleq, SubleqTask
 from evaluate import evaluate
 from reanalyze import reanalyze
@@ -149,6 +150,8 @@ def main() -> None:
     # Make the environment.
     env: pgx.Env
     match (config.env_class, config.env_id):
+        case ("custom", str(s)) if s.startswith("safety-minatar-freeway"):
+            env = TimeoutTerminationWrapper(SafetyMinAtarFreeway(), timelimit=config.max_episode_length)
         case ("custom", str(s)) if s.startswith("deep_sea"):
             # E.g. For DeepSea size 16, use "deep_sea-16".
             s = s.removeprefix("deep_sea-")
@@ -189,12 +192,16 @@ def main() -> None:
                     case "DIVISION":
                         tasks.append(SubleqTask.DIVISION)
             print(f"len(tasks) = {len(tasks)}, tasks = {tasks}")
-            env = TimeoutTerminationWrapper(Subleq(tasks=tasks, word_size=word_size, use_binary_encoding=config.use_binary_encoding), timelimit=config.max_episode_length)
+            env = TimeoutTerminationWrapper(
+                Subleq(tasks=tasks, word_size=word_size, use_binary_encoding=config.use_binary_encoding),
+                timelimit=config.max_episode_length,
+            )
         case ("pgx", env_id) if env_id in pgx.available_envs():
             if "minatar" in env_id:
                 env = TimeoutTerminationWrapper(pgx.make(env_id), timelimit=config.max_episode_length)
             else:
                 env = pgx.make(env_id)
+
         case (cl, id):
             assert False, f"Invalid environment settings: {cl}, {id}."
     # selfplay_env, planner_env, eval_env = make_envs(config.env_class, config.env_id)
@@ -225,10 +232,10 @@ def main() -> None:
     buffer_state = buffer_fn.init(jax.tree.map(lambda x: x[0], dummy_state))
 
     if config.save_replay_buffer:
-        parts = config.replay_buffer_path.split('/')
+        parts = config.replay_buffer_path.split("/")
         vault_uid = parts[-1]
         vault_name = parts[-2]
-        rel_dir = '/'.join(parts[:-2]) + '/' if len(parts) > 2 else ''
+        rel_dir = "/".join(parts[:-2]) + "/" if len(parts) > 2 else ""
         rb_vault = Vault(
             vault_uid=vault_uid, vault_name=vault_name, experience_structure=buffer_state.experience, rel_dir=rel_dir
         )
@@ -286,7 +293,7 @@ def main() -> None:
         max_ube=config.max_ube,
         weigh_losses=config.weigh_losses,
         loss_weighting_temperature=config.loss_weighting_temperature,
-        directed_exploration=config.directed_exploration
+        directed_exploration=config.directed_exploration,
     )
 
     # Training loop
@@ -420,7 +427,14 @@ def main() -> None:
                     jax.random.split(subkey, num_devices),
                 )
 
-                _observation, _next_observation, value_target, ube_target, _exploration_policy_target, _exploitation_policy_target = reanalyze_output
+                (
+                    _observation,
+                    _next_observation,
+                    value_target,
+                    ube_target,
+                    _exploration_policy_target,
+                    _exploitation_policy_target,
+                ) = reanalyze_output
                 log.update(
                     {
                         "train/mean_value_target": value_target.mean().item(),
