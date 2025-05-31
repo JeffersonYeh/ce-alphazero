@@ -21,6 +21,7 @@ from config import Config, setup_config
 from context import Context, get_epistemic_recurrent_fn, get_forward_fn
 from envs.deep_sea import DeepSea
 from envs.safety_freeway import SafetyMinAtarFreeway
+from envs.safety_grid import SafetyGrid
 from envs.subleq import Subleq, SubleqTask
 from evaluate import evaluate
 from reanalyze import reanalyze
@@ -152,6 +153,8 @@ def main() -> None:
     match (config.env_class, config.env_id):
         case ("safety", str(s)) if s.startswith("safety-minatar-freeway"):
             env = TimeoutTerminationWrapper(SafetyMinAtarFreeway(), timelimit=config.max_episode_length)
+        case ("safety", str(s)) if s.startswith("safety-grid"):
+            env = TimeoutTerminationWrapper(SafetyGrid(), timelimit=config.max_episode_length)
         case ("custom", str(s)) if s.startswith("deep_sea"):
             # E.g. For DeepSea size 16, use "deep_sea-16".
             s = s.removeprefix("deep_sea-")

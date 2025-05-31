@@ -14,7 +14,7 @@ class Config(pydantic.BaseModel):
     debug: bool = False  # If True, automatically loads much smaller hps to make debugging easier
     seed: int | None = None  # If None, seeds automatically with a random large integer
     env_class: Literal["pgx", "safety", "custom"] = "safety"
-    env_id: pgx.EnvId | str = "safety-minatar-freeway"
+    env_id: pgx.EnvId | str = "safety-grid"
     # env_id: pgx.EnvId | str = "safety-minatar-freeway"
     # env_id: pgx.EnvId | str = "subleq-negation-positive"
     subleq_tasks: list[str] = pydantic.Field(default_factory=lambda: ["NEGATION_POSITIVE"])
@@ -171,7 +171,7 @@ def setup_config(config: Config) -> Config:
             f"_{time.asctime(time.localtime(time.time()))}"
         )
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
-    config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
+    config.hash_path = "minatar_az_net/" if "minatar" in config.env_id or "safety" in config.env_class else "fc_az_net/"
     config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
 
     config.reanalyze_loops_per_selfplay = max(
