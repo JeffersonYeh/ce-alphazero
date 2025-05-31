@@ -111,4 +111,12 @@ class EpistemicMinatarAZNet(hk.Module):
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty
+        network_output = NetworkOutput(
+            exploitation_logits=main_policy_logits,
+            exploration_logits=exploration_policy_logits,
+            value=v,
+            value_epistemic_variance=u,
+            reward_epistemic_variance=scaled_state_novelty,
+        )
+
+        return network_output

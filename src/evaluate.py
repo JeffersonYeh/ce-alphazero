@@ -1,6 +1,6 @@
 from functools import partial
 
-import emctx
+import cemctx as emctx
 import jax
 import jax.numpy as jnp
 import pgx  # type: ignore
@@ -23,15 +23,28 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
         states, rng_key, sum_of_rewards, counter = tup
         rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
 
-        (exploitation_logits, _exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
-            context.forward.apply(model_params, model_state, states.observation, is_training=False)
-        )
+        network_output, _ = context.forward.apply(model_params, model_state, states.observation, is_training=False)
+
+        exploitation_logits = network_output.exploitation_logits
+        exploration_logits = network_output.exploration_logits
+        value = network_output.value
+        value_epistemic_variance = network_output.value_epistemic_variance
+        _reward_epistemic_variance = network_output.reward_epistemic_variance
+        cost_value = network_output.cost_value
+        cost_value_epistemic_variance = network_output.cost_value_epistemic_variance
+        _cost_epistemic_variance = network_output.cost_epistemic_variance
+
+        # TODO: Update to use costs
         root = emctx.EpistemicRootFnOutput(
             prior_logits=exploitation_logits,  # type: ignore
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             embedding=states,  # type: ignore
-            beta=config.exploitation_beta * jnp.ones_like(value),  # type: ignore
+            beta_v=config.exploitation_beta_v * jnp.ones_like(value),  # type: ignore
+            beta_c=config.exploitation_beta_c * jnp.ones_like(value),  # type: ignore
+            cost_value=cost,
+            cost_value_epistemic_variance=cost_value_epistemic_variance,
+            cost_threshold=_cost_epistemic_variance,
         )
         policy_output = emctx.epistemic_gumbel_muzero_policy(
             params=model,

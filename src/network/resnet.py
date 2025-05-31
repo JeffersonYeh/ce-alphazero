@@ -61,8 +61,8 @@ class EpistemicResidualAZNet(hk.Module):
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
         # The network assumes values are bounded -1 to 1
-        self.max_u = 1.0    # for values -1 to 1, the maximum variance is 2**2 / 4 = 1
-        self.max_reward_epistemic_variance = 1.0    # The net assumes rewards -1 to 1
+        self.max_u = 1.0  # for values -1 to 1, the maximum variance is 2**2 / 4 = 1
+        self.max_reward_epistemic_variance = 1.0  # The net assumes rewards -1 to 1
 
     def __call__(
         self, x: Observation, is_training: bool, test_local_stats: bool, update_hash: bool = False
@@ -132,4 +132,12 @@ class EpistemicResidualAZNet(hk.Module):
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty
+        network_output = NetworkOutput(
+            exploitation_logits=main_policy_logits,
+            exploration_logits=exploration_policy_logits,
+            value=v,
+            value_epistemic_variance=u,
+            reward_epistemic_variance=scaled_state_novelty,
+        )
+
+        return network_output

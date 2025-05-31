@@ -1,3 +1,2 @@
-[submodule "cemctx"]
-	path = cemctx
-	url = git@github.com:shirleyxindi/cemctx.git
+[submodule "submodules/cemctx"]
+	path = submodules/cemctx

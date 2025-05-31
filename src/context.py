@@ -1,13 +1,16 @@
-from typing import NamedTuple, Type
+from typing import NamedTuple, Optional, Type
 
-import emctx
+import chex
+
 import haiku as hk
 import jax
 import jax.numpy as jnp
 import optax  # type: ignore
 import pgx  # type: ignore
 
+import cemctx as emctx
 from config import Config
+from network.c_minatar import ConstraintEpistemicMinatarAZNet
 from network.fully_connected import EpistemicFullyConnectedAZNet
 from network.hashes import LCGHash, SimHash, XXHash
 from network.minatar import EpistemicMinatarAZNet
@@ -47,7 +50,17 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             hash_class = SimHash
         case "XXHash":
             hash_class = XXHash
-    if "minatar" in config.env_id:
+    if "safety" in config.env_class:
+        return ConstraintEpistemicMinatarAZNet(
+            num_actions=env.num_actions,
+            num_channels=config.num_channels,
+            max_ube=config.max_ube,
+            discount=config.discount,
+            hidden_layers_size=config.linear_layer_size,
+            hash_class=hash_class,
+            max_epistemic_variance_reward=config.max_epistemic_variance_reward,
+        )
+    elif "minatar" in config.env_id:
         return EpistemicMinatarAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
@@ -85,23 +98,18 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
 # Set up the training model and optimizer.
 def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
     def forward_fn(x: Observation, is_training: bool = True, update_hash: bool = False) -> NetworkOutput:
-        net = get_network(env, config)
-        (
-            exploitation_policy_logits,
-            exploration_policy_logits,
-            value,
-            value_epistemic_variance,
-            reward_epistemic_variance,
-        ) = net(
-            x, is_training=is_training, test_local_stats=False, update_hash=update_hash
-        )  # type: ignore
-        return (
-            exploitation_policy_logits,
-            exploration_policy_logits,
-            value,
-            value_epistemic_variance,
-            reward_epistemic_variance,
-        )
+        if "safety" in config.env_class:
+            net = get_network(env, config)
+            network_output = net(
+                x, is_training=is_training, test_local_stats=False, update_hash=update_hash
+            )  # type: ignore
+            return network_output
+        else:
+            net = get_network(env, config)
+            network_output = net(
+                x, is_training=is_training, test_local_stats=False, update_hash=update_hash
+            )  # type: ignore
+            return network_output
 
     return hk.without_apply_rng(hk.transform_with_state(forward_fn))
 
@@ -113,6 +121,7 @@ def get_epistemic_recurrent_fn(
     exploration: bool,
     discount: float,
     two_players_game: bool,
+    safety: bool,
 ) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
         model: Model,
@@ -126,9 +135,17 @@ def get_epistemic_recurrent_fn(
         keys = jax.random.split(rng_key, batch_size)
         state = jax.vmap(env.step)(state, action, keys)
         value: Array
-        (exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
-            forward.apply(model_params, model_state, state.observation, is_training=False)
-        )
+        network_output, _ = forward.apply(model_params, model_state, state.observation, is_training=False)
+
+        exploitation_logits = network_output.exploitation_logits
+        exploration_logits = network_output.exploration_logits
+        value = network_output.value
+        value_epistemic_variance = network_output.value_epistemic_variance
+        _reward_epistemic_variance = network_output.reward_epistemic_variance
+        cost_value = network_output.cost_value
+        cost_value_epistemic_variance = network_output.cost_value_epistemic_variance
+        _cost_epistemic_variance = network_output.cost_epistemic_variance
+
         logits = jax.lax.cond(exploration, lambda: exploration_logits, lambda: exploitation_logits)
 
         # Subtract max from logits to improve numerical stability.
@@ -143,6 +160,12 @@ def get_epistemic_recurrent_fn(
         batched_discount = jax.lax.cond(two_players_game, lambda: batched_discount * -1.0, lambda: batched_discount)  # type: ignore
         batched_discount = jnp.where(state.terminated, 0.0, batched_discount)
 
+        cost = state.costs[jnp.arange(state.rewards.shape[0]), current_player] if safety else None
+        cost_value = jnp.where(state.terminated, 0.0, cost_value) if safety else None
+        cost_value_epistemic_variance = (
+            jnp.where(state.terminated, 0.0, cost_value_epistemic_variance) if safety else None
+        )
+
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
             reward=reward,  # type: ignore
             # NOTE: We have a known reward model, so we pass 0 reward uncertainty.
@@ -151,6 +174,12 @@ def get_epistemic_recurrent_fn(
             prior_logits=logits,  # type: ignore
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
+            cost=cost,
+            cost_epistemic_variance=jnp.zeros_like(
+                reward
+            ),  # NOTE: We have a known cost model, so we pass 0 cost uncertainty.
+            cost_value=cost_value,
+            cost_value_epistemic_variance=cost_value_epistemic_variance,
         )
         return epistemic_recurrent_fn_output, state
 

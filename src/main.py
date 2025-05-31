@@ -150,7 +150,7 @@ def main() -> None:
     # Make the environment.
     env: pgx.Env
     match (config.env_class, config.env_id):
-        case ("custom", str(s)) if s.startswith("safety-minatar-freeway"):
+        case ("safety", str(s)) if s.startswith("safety-minatar-freeway"):
             env = TimeoutTerminationWrapper(SafetyMinAtarFreeway(), timelimit=config.max_episode_length)
         case ("custom", str(s)) if s.startswith("deep_sea"):
             # E.g. For DeepSea size 16, use "deep_sea-16".
@@ -257,6 +257,7 @@ def main() -> None:
     mean_returns_list = []
     frames_at_mean_returns_list = []
     rewards_not_yet_observed_flag = True
+    costs_not_yet_observed_flag = True
 
     context = Context(
         env=env,
@@ -269,6 +270,7 @@ def main() -> None:
             exploration=config.directed_exploration,
             discount=config.discount,
             two_players_game=config.two_players_game,
+            safety="safety" in config.env_class,
         ),
         reanalyze_recurrent_fn=get_epistemic_recurrent_fn(
             env=env,
@@ -277,6 +279,7 @@ def main() -> None:
             exploration=False,
             discount=config.discount,
             two_players_game=config.two_players_game,
+            safety="safety" in config.env_class,
         ),
         evaluation_recurrent_fn=get_epistemic_recurrent_fn(
             env=env,
@@ -285,11 +288,12 @@ def main() -> None:
             exploration=False,
             discount=config.discount,
             two_players_game=config.two_players_game,
+            safety="safety" in config.env_class,
         ),
         optimizer=optimizer,
         scale_uncertainty_losses=config.scale_uncertainty_losses,
         hash_path=config.hash_path,  # TODO: Automatically figure this out
-        exploration_beta=config.exploration_beta,
+        exploration_beta=config.exploration_beta_v,
         max_ube=config.max_ube,
         weigh_losses=config.weigh_losses,
         loss_weighting_temperature=config.loss_weighting_temperature,
@@ -302,49 +306,49 @@ def main() -> None:
         if config.track:
             wandb.log(log)
         log = {}
+        # TODO: Reactivate
+        # if iteration % config.eval_interval == 0:
+        #     # Evaluate network.
+        #     mean_return = None
+        #     if config.exploitation_beta_v < 0:
+        #         # Do regular evaluation
+        #         original_exploitation_beta = config.exploitation_beta_v
+        #         config.exploitation_beta_v = 0.0
+        #         rng_key, subkey = jax.random.split(rng_key)
+        #         mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+        #         log.update({"regular mean_return": mean_return.item()})
+        #         # And then do pessim_evaluation
+        #         config.exploitation_beta_v = original_exploitation_beta
+        #         rng_key, subkey = jax.random.split(rng_key)
+        #         mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+        #         log.update({"pessimistic_evaluation mean_return": mean_return.item()})
+        #     else:
+        #         rng_key, subkey = jax.random.split(rng_key)
+        #         mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+        #         log.update({"mean_return": mean_return.item()})
 
-        if iteration % config.eval_interval == 0:
-            # Evaluate network.
-            mean_return = None
-            if config.exploitation_beta < 0:
-                # Do regular evaluation
-                original_exploitation_beta = config.exploitation_beta
-                config.exploitation_beta = 0.0
-                rng_key, subkey = jax.random.split(rng_key)
-                mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-                log.update({"regular mean_return": mean_return.item()})
-                # And then do pessim_evaluation
-                config.exploitation_beta = original_exploitation_beta
-                rng_key, subkey = jax.random.split(rng_key)
-                mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-                log.update({"pessimistic_evaluation mean_return": mean_return.item()})
-            else:
-                rng_key, subkey = jax.random.split(rng_key)
-                mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-                log.update({"mean_return": mean_return.item()})
+        #     mean_returns_list.append(mean_return)
+        #     frames_at_mean_returns_list.append(frames)
+        #     jnp.save(file=complete_results_path + "/mean_returns_list.npy", arr=mean_returns_list)
+        #     jnp.save(file=complete_results_path + "/frames_at_mean_returns_list.npy", arr=frames_at_mean_returns_list)
+        #     sys.stdout.flush()
 
-            mean_returns_list.append(mean_return)
-            frames_at_mean_returns_list.append(frames)
-            jnp.save(file=complete_results_path + "/mean_returns_list.npy", arr=mean_returns_list)
-            jnp.save(file=complete_results_path + "/frames_at_mean_returns_list.npy", arr=frames_at_mean_returns_list)
-            sys.stdout.flush()
-
-        if iteration % config.checkpoint_interval == 0:
-            # Save checkpoint.
-            model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
-            with open(os.path.join(checkpoint_dir, f"{iteration:06d}.ckpt"), "wb") as f:
-                dic = {
-                    "config": config,
-                    "rng_key": rng_key,
-                    "model": jax.device_get(model_0),
-                    "opt_state": jax.device_get(opt_state_0),
-                    "iteration": iteration,
-                    "frames": frames,
-                    "hours": hours,
-                    "env_id": env.id,
-                    "env_version": env.version,
-                }
-                pickle.dump(dic, f)
+        # if iteration % config.checkpoint_interval == 0:
+        #     # Save checkpoint.
+        #     model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
+        #     with open(os.path.join(checkpoint_dir, f"{iteration:06d}.ckpt"), "wb") as f:
+        #         dic = {
+        #             "config": config,
+        #             "rng_key": rng_key,
+        #             "model": jax.device_get(model_0),
+        #             "opt_state": jax.device_get(opt_state_0),
+        #             "iteration": iteration,
+        #             "frames": frames,
+        #             "hours": hours,
+        #             "env_id": env.id,
+        #             "env_version": env.version,
+        #         }
+        #         pickle.dump(dic, f)
 
         if iteration >= config.maximum_number_of_iterations:
             break
@@ -355,9 +359,23 @@ def main() -> None:
         if frames < config.learning_starts:
             last_states, states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
         else:
-            last_states, (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = (
-                selfplay(model, config, context, last_states, jax.random.split(subkey, num_devices))
+            last_states, selfplay_output = selfplay(
+                model, config, context, last_states, jax.random.split(subkey, num_devices)
             )
+
+            (
+                states,
+                root_values,
+                root_epistemic_stds,
+                root_cost_values,
+                root_cost_epistemic_stds,
+                raw_values,
+                cost_values,
+                value_prediction_epistemic_variances,
+                q_value_variances,
+                q_cost_variances,
+            ) = selfplay_output
+
             all_rewards = states.rewards.sum().item()
             if rewards_not_yet_observed_flag and all_rewards > 0:
                 frames_to_first_reward = frames + config.selfplay_batch_size * config.selfplay_steps
@@ -365,16 +383,40 @@ def main() -> None:
                 rewards_not_yet_observed_flag = False
                 log.update({"frames_to_first_reward": frames_to_first_reward})
 
-            log.update(
-                {
-                    "mean_raw_value": raw_values.mean().item(),
-                    "mean_root_value": root_values.mean().item(),
-                    "mean_ube": ube_predictions.mean().item(),
-                    "mean_root_epistemic_std": root_epistemic_stds.mean().item(),
-                    "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
-                    "observed_rewards": all_rewards,
-                }
-            )
+            if "safety" in config.env_class:
+                all_costs = states.costs.sum().item()
+                if costs_not_yet_observed_flag and all_costs > 0:
+                    frames_to_first_cost = frames + config.selfplay_batch_size * config.selfplay_steps
+                    print(f"Observed first cost after frames: {frames_to_first_cost}")
+                    costs_not_yet_observed_flag = False
+                    log.update({"frames_to_first_cost": frames_to_first_cost})
+
+            if "safety" in config.env_class:
+                log.update(
+                    {
+                        "mean_raw_value": raw_values.mean().item(),
+                        "mean_root_value": root_values.mean().item(),
+                        "mean_raw_cost_value": cost_values.mean().item(),
+                        "mean_root_cost_value": root_cost_values.mean().item(),
+                        "mean_ube": value_prediction_epistemic_variances.mean().item(),
+                        "mean_root_epistemic_std": root_epistemic_stds.mean().item(),
+                        "mean_root_cost_epistemic_std": root_cost_epistemic_stds.mean().item(),
+                        "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
+                        "mean_root_max_child_cost_epistemic_variance": q_cost_variances.max(axis=-1).mean().item(),
+                        "observed_rewards": all_rewards,
+                    }
+                )
+            else:
+                log.update(
+                    {
+                        "mean_raw_value": raw_values.mean().item(),
+                        "mean_root_value": root_values.mean().item(),
+                        "mean_ube": ube_predictions.mean().item(),
+                        "mean_root_epistemic_std": root_epistemic_stds.mean().item(),
+                        "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
+                        "observed_rewards": all_rewards,
+                    }
+                )
 
             if "deep_sea" in config.env_id:
                 ube_predictions, unseen_states = debug_deep_sea(all_states_batch, model, context)  # type: ignore
@@ -394,6 +436,7 @@ def main() -> None:
             rb_vault.write(buffer_state)
 
         value_loss_list = []
+        cost_value_loss_list = []
         ube_loss_list = []
         exploitation_policy_loss_list = []
         exploration_policy_loss_list = []
@@ -431,6 +474,7 @@ def main() -> None:
                     _observation,
                     _next_observation,
                     value_target,
+                    cost_value_target,
                     ube_target,
                     _exploration_policy_target,
                     _exploitation_policy_target,
@@ -439,6 +483,7 @@ def main() -> None:
                     {
                         "train/mean_value_target": value_target.mean().item(),
                         "train/mean_ube_target": ube_target.mean().item(),
+                        "train/mean_cost_value_target": cost_value_target.mean().item(),
                     }
                 )
 
@@ -457,6 +502,7 @@ def main() -> None:
                     exploitation_policy_entropy,
                     exploration_policy_entropy,
                     value_loss,
+                    cost_value_loss,
                     ube_loss,
                     exploitation_policy_loss,
                     exploration_policy_loss,
@@ -470,6 +516,7 @@ def main() -> None:
                 # Keep track of losses for logging.
                 # `.mean()` because we get a separate loss per device.
                 value_loss_list.append(value_loss.mean().item())
+                cost_value_loss_list.append(cost_value_loss.mean().item() if cost_value_loss is not None else 0.0)
                 ube_loss_list.append(ube_loss.mean().item())
                 exploitation_policy_loss_list.append(exploitation_policy_loss.mean().item())
                 exploration_policy_loss_list.append(exploration_policy_loss.mean().item())
@@ -490,6 +537,7 @@ def main() -> None:
                     "hours": (time.time() - start_time) / 3600,
                     "frames": frames,
                     "train/value_loss": sum(value_loss_list) / len(value_loss_list),
+                    "train/cost_value_loss": sum(cost_value_loss_list) / len(cost_value_loss_list),
                     "train/ube_loss": sum(ube_loss_list) / len(ube_loss_list),
                     "train/exploitation_policy_loss": sum(exploitation_policy_loss_list)
                     / len(exploitation_policy_loss_list),

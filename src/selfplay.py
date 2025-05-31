@@ -2,10 +2,11 @@ from functools import partial
 from typing import NamedTuple
 
 import chex
-import emctx
+import cemctx as emctx
 import jax
 import jax.numpy as jnp
 import pgx
+
 # from pgx.experimental import auto_reset  # type: ignore
 
 from config import Config
@@ -18,9 +19,13 @@ class SelfplayOutput(NamedTuple):
     state: pgx.State
     root_value: Array
     root_epistemic_std: Array
+    root_cost_value: Optional[Array]
+    root_cost_epistemic_std: Optional[Array]
     value_prediction: Array
-    ube_prediction: Array
+    cost_value_prediction: Optional[Array]
+    value_prediction_epistemic_variance: Array
     q_values_epistemic_variance: Array
+    q_cost_epistemic_variance: Optional[Array]
 
 
 def auto_reset(step_fn, init_fn):
@@ -45,9 +50,7 @@ def auto_reset(step_fn, init_fn):
     2. Performance
     """
 
-    def wrapped_step_fn(
-            state: pgx.State, action: Array, key: Optional[PRNGKey] = None
-    ):
+    def wrapped_step_fn(state: pgx.State, action: Array, key: Optional[PRNGKey] = None):
         assert key is not None, (
             "v2.0.0 changes the signature of auto reset. Please specify PRNGKey at the third argument:\n\n"
             "  * <  v2.0.0: step_fn(state, action)\n"
@@ -65,9 +68,9 @@ def auto_reset(step_fn, init_fn):
         # Otherwise, step
         key1, key2 = jax.random.split(key)
         state = jax.lax.cond(
-            (state.terminated | state.truncated),   # If state is already terminal
-            lambda: init_fn(key1),                  # reset the environent
-            lambda: step_fn(state, action, key2),   # step into a new state
+            (state.terminated | state.truncated),  # If state is already terminal
+            lambda: init_fn(key1),  # reset the environent
+            lambda: step_fn(state, action, key2),  # step into a new state
         )
 
         return state
@@ -86,12 +89,24 @@ def selfplay(
     def step_fn(states: pgx.State, key: PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
         key1, key2, key3, key4 = jax.random.split(key, num=4)
 
-        (exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
-            context.forward.apply(model_params, model_state, states.observation, is_training=False)
-        )
-        selfplay_beta = jax.lax.cond(config.directed_exploration, lambda: config.exploration_beta, lambda: 0.0)
+        network_output, _ = context.forward.apply(model_params, model_state, states.observation, is_training=False)
+
+        exploitation_logits = network_output.exploitation_logits
+        exploration_logits = network_output.exploration_logits
+        value = network_output.value
+        value_epistemic_variance = network_output.value_epistemic_variance
+        _reward_epistemic_variance = network_output.reward_epistemic_variance
+        cost_value = network_output.cost_value
+        cost_value_epistemic_variance = network_output.cost_value_epistemic_variance
+        _cost_epistemic_variance = network_output.cost_epistemic_variance
+
+        selfplay_beta_v = jax.lax.cond(config.directed_exploration, lambda: config.exploration_beta_v, lambda: 0.0)
+        selfplay_beta_c = jax.lax.cond(config.safe_exploration, lambda: config.exploration_beta_c, lambda: 0.0)
+        cost_threshold = jax.lax.cond(config.env_class == "safety", lambda: context.env.cost_threshold, lambda: 0.0)
         policy_logits = jax.lax.cond(
-            config.directed_exploration, lambda: exploration_logits, lambda: exploitation_logits
+            config.directed_exploration,
+            lambda: exploration_logits,
+            lambda: exploitation_logits,
         )
         policy_logits = jax.lax.cond(
             config.uniform_search_policy, lambda: jnp.ones_like(policy_logits), lambda: policy_logits
@@ -102,7 +117,11 @@ def selfplay(
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             embedding=states,  # type: ignore
-            beta=selfplay_beta * jnp.linspace(0, 1, num=value.size).reshape(value.shape),  # type: ignore
+            beta_v=selfplay_beta_v * jnp.ones_like(value),  # type: ignore
+            beta_c=selfplay_beta_c * jnp.ones_like(value),  # type: ignore
+            cost_value=cost_value,
+            cost_value_epistemic_variance=cost_value_epistemic_variance,
+            cost_threshold=cost_threshold * jnp.ones_like(value),
         )
         policy_output = emctx.epistemic_gumbel_muzero_policy(
             params=model,
@@ -119,6 +138,8 @@ def selfplay(
         search_summary = policy_output.search_tree.epistemic_summary()
         root_values = search_summary.value
         root_epistemic_stds = search_summary.value_epistemic_std
+        root_cost_values = search_summary.cost_value if config.env_class == "safety" else None
+        root_cost_epistemic_stds = search_summary.cost_value_epistemic_std if config.env_class == "safety" else None
         # Note: for GumbelMZ this is essentially det. argmax, while for MZ (PUCT) this is sampled from counts.
         action_chosen_by_search_tree = policy_output.action
         # Sample from visits
@@ -133,13 +154,20 @@ def selfplay(
             config.sample_from_improved_policy, lambda: sampled_action_from_improved_policy, lambda: chosen_action
         )
         next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, chosen_action, keys)
+
         return next_state, SelfplayOutput(
             state=next_state,
             root_value=root_values,  # type: ignore
             root_epistemic_std=root_epistemic_stds,  # type: ignore
+            root_cost_value=root_cost_values,
+            root_cost_epistemic_std=root_cost_epistemic_stds,
             value_prediction=value,
-            ube_prediction=value_epistemic_variance,
+            cost_value_prediction=cost_value,
+            value_prediction_epistemic_variance=value_epistemic_variance,  # NOTE: We consider here that cost UBE and value UBE prediction are the same
             q_values_epistemic_variance=search_summary.qvalues_epistemic_variance,  # type: ignore
+            q_cost_epistemic_variance=(
+                search_summary.cost_qvalues_epistemic_variance if config.env_class == "safety" else None
+            ),
         )
 
     rng_key, sub_key = jax.random.split(rng_key)

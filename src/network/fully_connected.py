@@ -23,7 +23,7 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         hash_args: dict[str, Any] | None = None,
         name="fc_az_net",
         word_size: int = 16,
-        hash_io: bool = False
+        hash_io: bool = False,
     ):
         super().__init__(name=name)
         self.num_actions = num_actions
@@ -83,7 +83,7 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
         if self.hash_io:
-            hash_input = unflattened_x[:, self.word_size:, :]
+            hash_input = unflattened_x[:, self.word_size :, :]
             hash_input = hk.Flatten()(hash_input)
         else:
             hash_input = x
@@ -98,4 +98,12 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         if update_hash:
             hash_obj.update(hash_input)
 
-        return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty
+        network_output = NetworkOutput(
+            exploitation_logits=main_policy_logits,
+            exploration_logits=exploration_policy_logits,
+            value=v,
+            value_epistemic_variance=u,
+            reward_epistemic_variance=scaled_state_novelty,
+        )
+
+        return network_output

@@ -79,6 +79,7 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         # v = jnp.tanh(v)
         v = v.reshape((-1,))
 
+        # TODO: Should there also be a safety policy head which learns a policy which respects cost constraints?
         # Cost head
         c = hk.Linear(self.hidden_layers_size)(x1)
         c = jax.nn.relu(c)
@@ -121,4 +122,15 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty
+        network_output = NetworkOutput(
+            exploitation_logits=main_policy_logits,
+            exploration_logits=exploration_policy_logits,
+            value=v,
+            value_epistemic_variance=u,
+            reward_epistemic_variance=scaled_state_novelty,
+            cost_value=c,
+            cost_value_epistemic_variance=u,
+            cost_epistemic_variance=scaled_state_novelty,
+        )
+
+        return network_output

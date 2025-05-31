@@ -90,6 +90,8 @@ class SafetyMinAtarFreeway(core.Env):
         if self.use_minimal_action_set:
             self.legal_action_mask = jnp.ones(self.minimal_action_set.shape[0], dtype=jnp.bool_)
 
+        self.cost_threshold = COST_TRESHOLD
+
     def step(self, state: core.State, action: Array, key: Optional[Array] = None) -> core.State:
         assert key is not None, (
             "v2.0.0 changes the signature of step. Please specify PRNGKey at the third argument:\n\n"
@@ -199,6 +201,7 @@ def _step_det(
     terminate_timer -= ONE
     terminal = terminate_timer < 0
 
+    # TODO: Watch out for this, it has now the cum_costs in it, could this be a problem in terms of how the state is represented in the NN/hash map, it should be the same state even with different cum_costs (its a property of the trajectory not of the state)
     next_state = state.replace(  # type: ignore
         _cars=cars,
         _pos=pos,

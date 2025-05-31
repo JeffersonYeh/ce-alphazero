@@ -1,4 +1,5 @@
 from functools import partial
+from typing import NamedTuple, Optional
 
 import chex
 import jax
@@ -11,39 +12,68 @@ from reanalyze import ReanalyzeOutput
 from type_aliases import Model
 
 
+class LossOutput(NamedTuple):
+    model_state: dict
+    priority_score: chex.Array
+    mean_exploitation_policy_entropy: chex.Array
+    mean_exploration_policy_entropy: chex.Array
+    value_loss: chex.Array
+    cost_value_loss: Optional[chex.Array]
+    ube_loss: chex.Array
+    exploitation_policy_loss: chex.Array
+    exploration_policy_loss: chex.Array
+    batch_novelty: chex.Array
+
+
+# TODO: Go over these once more to see if cost loss is properly implemented
 def loss_fn(model_params, model_state, context: Context, reanalyze_output: ReanalyzeOutput):
-    (
-        exploitation_logits,
-        exploration_logits,
-        value,
-        value_epistemic_variance,
-        reward_epistemic_variance,
-    ), model_state = context.forward.apply(
+    network_output, model_state = context.forward.apply(
         model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
     )
+
+    exploitation_logits = network_output.exploitation_logits
+    exploration_logits = network_output.exploration_logits
+    value = network_output.value
+    value_epistemic_variance = network_output.value_epistemic_variance
+    reward_epistemic_variance = network_output.reward_epistemic_variance
+    cost_value = network_output.cost_value
+    cost_value_epistemic_variance = network_output.cost_value_epistemic_variance
+    _cost_epistemic_variance = network_output.cost_epistemic_variance
 
     # Compute losses
     # We scale the value target by value_scale, because value pred. is between [-1,1] for stability
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
+    cost_value_loss = optax.l2_loss(cost_value, reanalyze_output.cost_value_target) if cost_value is not None else None
     # We scale the ube target by ube_scale, because ube pred. is between [0,1] for stability
     ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
     exploitation_policy_loss = optax.softmax_cross_entropy(
-        exploitation_logits, reanalyze_output.exploitation_policy_target)
+        exploitation_logits, reanalyze_output.exploitation_policy_target
+    )
     exploration_policy_loss = optax.softmax_cross_entropy(
-        exploration_logits, reanalyze_output.exploration_policy_target)
+        exploration_logits, reanalyze_output.exploration_policy_target
+    )
 
     # Compute loss weights, based on Sunrise, https://arxiv.org/pdf/2007.04938
     epistemic_loss_weights = 0.5 + nn.sigmoid(-1 * reanalyze_output.ube_target * context.loss_weighting_temperature)
-    epistemic_loss_weights = jax.lax.cond(context.weigh_losses, lambda: epistemic_loss_weights,
-                                          lambda: jnp.ones_like(value_loss))
+    epistemic_loss_weights = jax.lax.cond(
+        context.weigh_losses, lambda: epistemic_loss_weights, lambda: jnp.ones_like(value_loss)
+    )
 
-    chex.assert_equal_shape([ube_loss, value_loss, exploitation_policy_loss, exploration_policy_loss, epistemic_loss_weights])
+    chex.assert_equal_shape(
+        [ube_loss, value_loss, exploitation_policy_loss, exploration_policy_loss, epistemic_loss_weights]
+    )
 
-    total_loss = jnp.mean(epistemic_loss_weights * (value_loss + exploitation_policy_loss) +
-                          exploration_policy_loss + ube_loss)
+    total_loss = jnp.mean(
+        epistemic_loss_weights * (value_loss + exploitation_policy_loss)
+        + exploration_policy_loss
+        + ube_loss
+        + jax.lax.cond(cost_value_loss is None, lambda: jnp.zeros_like(value_loss), lambda: cost_value_loss)
+    )
 
     # Compute error for priority:
-    error_beta = jax.lax.cond(context.exploration_beta > 0.0 and context.directed_exploration, lambda: 0.01, lambda: 0.0)
+    error_beta = jax.lax.cond(
+        context.exploration_beta > 0.0 and context.directed_exploration, lambda: 0.01, lambda: 0.0
+    )
     # The UBE prediction and target need to be rescaled [0,1] -> [0,max] -> sqrt([0,max])
     rescaled_ube_prediction = jnp.sqrt(jnp.abs(value_epistemic_variance))
     rescaled_ube_target = jnp.sqrt(reanalyze_output.ube_target)
@@ -53,8 +83,9 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         - (reanalyze_output.value_target + error_beta * rescaled_ube_target)
     )
     # If we use epistemic loss weighting, we should also adjust the priorities
-    priority_score = jax.lax.cond(context.weigh_losses, lambda: priority_score * epistemic_loss_weights,
-                                  lambda: priority_score)
+    priority_score = jax.lax.cond(
+        context.weigh_losses, lambda: priority_score * epistemic_loss_weights, lambda: priority_score
+    )
 
     # Log the policies entropies
     # Compute the probabilities by applying softmax
@@ -71,17 +102,20 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     # batch novelty, i.e. how many of these states have we "seen" before.
     batch_novelty = reward_epistemic_variance.mean()
 
-    return total_loss, (
-        model_state,
-        priority_score,
-        mean_exploitation_policy_entropy,
-        mean_exploration_policy_entropy,
-        value_loss,
-        ube_loss,
-        exploitation_policy_loss,
-        exploration_policy_loss,
-        batch_novelty,
+    loss_output = LossOutput(
+        model_state=model_state,
+        priority_score=priority_score,
+        mean_exploitation_policy_entropy=mean_exploitation_policy_entropy,
+        mean_exploration_policy_entropy=mean_exploration_policy_entropy,
+        value_loss=value_loss,
+        cost_value_loss=cost_value_loss,
+        ube_loss=ube_loss,
+        exploitation_policy_loss=exploitation_policy_loss,
+        exploration_policy_loss=exploration_policy_loss,
+        batch_novelty=batch_novelty,
     )
+
+    return total_loss, loss_output
 
 
 @partial(jax.pmap, axis_name="i", static_broadcasted_argnums=[2])
