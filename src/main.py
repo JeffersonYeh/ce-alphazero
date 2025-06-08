@@ -30,6 +30,8 @@ from train import train
 
 from type_aliases import PRNGKey, Array
 
+# TODO: Remove python If statements
+
 
 class TimeoutTerminationWrapper(pgx.Env):
     """
@@ -258,6 +260,7 @@ def main() -> None:
     start_time = time.time()
 
     mean_returns_list = []
+    mean_costs_list = []
     frames_at_mean_returns_list = []
     rewards_not_yet_observed_flag = True
     costs_not_yet_observed_flag = True
@@ -309,49 +312,56 @@ def main() -> None:
         if config.track:
             wandb.log(log)
         log = {}
-        # TODO: Reactivate
-        # if iteration % config.eval_interval == 0:
-        #     # Evaluate network.
-        #     mean_return = None
-        #     if config.exploitation_beta_v < 0:
-        #         # Do regular evaluation
-        #         original_exploitation_beta = config.exploitation_beta_v
-        #         config.exploitation_beta_v = 0.0
-        #         rng_key, subkey = jax.random.split(rng_key)
-        #         mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-        #         log.update({"regular mean_return": mean_return.item()})
-        #         # And then do pessim_evaluation
-        #         config.exploitation_beta_v = original_exploitation_beta
-        #         rng_key, subkey = jax.random.split(rng_key)
-        #         mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-        #         log.update({"pessimistic_evaluation mean_return": mean_return.item()})
-        #     else:
-        #         rng_key, subkey = jax.random.split(rng_key)
-        #         mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-        #         log.update({"mean_return": mean_return.item()})
 
-        #     mean_returns_list.append(mean_return)
-        #     frames_at_mean_returns_list.append(frames)
-        #     jnp.save(file=complete_results_path + "/mean_returns_list.npy", arr=mean_returns_list)
-        #     jnp.save(file=complete_results_path + "/frames_at_mean_returns_list.npy", arr=frames_at_mean_returns_list)
-        #     sys.stdout.flush()
+        if iteration % config.eval_interval == 0:
+            # Evaluate network.
+            mean_return = None
+            mean_cost = None
+            # TODO: This can be used to test different beta_c configs
+            if config.exploitation_beta_v < 0:
+                # Do regular evaluation
+                original_exploitation_beta = config.exploitation_beta_v
+                config.exploitation_beta_v = 0.0
+                rng_key, subkey = jax.random.split(rng_key)
+                mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+                log.update({"regular mean_return": mean_return.item()})
+                log.update({"regular mean_cost": mean_cost.item()})
+                # And then do pessim_evaluation
+                config.exploitation_beta_v = original_exploitation_beta
+                rng_key, subkey = jax.random.split(rng_key)
+                mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+                log.update({"pessimistic_evaluation mean_return": mean_return.item()})
+                log.update({"pessimistic_evaluation mean_cost": mean_cost.item()})
+            else:
+                rng_key, subkey = jax.random.split(rng_key)
+                mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+                log.update({"mean_return": mean_return.item()})
+                log.update({"mean_cost": mean_cost.item()})
 
-        # if iteration % config.checkpoint_interval == 0:
-        #     # Save checkpoint.
-        #     model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
-        #     with open(os.path.join(checkpoint_dir, f"{iteration:06d}.ckpt"), "wb") as f:
-        #         dic = {
-        #             "config": config,
-        #             "rng_key": rng_key,
-        #             "model": jax.device_get(model_0),
-        #             "opt_state": jax.device_get(opt_state_0),
-        #             "iteration": iteration,
-        #             "frames": frames,
-        #             "hours": hours,
-        #             "env_id": env.id,
-        #             "env_version": env.version,
-        #         }
-        #         pickle.dump(dic, f)
+            mean_returns_list.append(mean_return)
+            mean_costs_list.append(mean_cost)
+            frames_at_mean_returns_list.append(frames)
+            jnp.save(file=complete_results_path + "/mean_returns_list.npy", arr=mean_returns_list)
+            jnp.save(file=complete_results_path + "/mean_costs_list.npy", arr=mean_costs_list)
+            jnp.save(file=complete_results_path + "/frames_at_mean_returns_list.npy", arr=frames_at_mean_returns_list)
+            sys.stdout.flush()
+
+        if iteration % config.checkpoint_interval == 0:
+            # Save checkpoint.
+            model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
+            with open(os.path.join(checkpoint_dir, f"{iteration:06d}.ckpt"), "wb") as f:
+                dic = {
+                    "config": config,
+                    "rng_key": rng_key,
+                    "model": jax.device_get(model_0),
+                    "opt_state": jax.device_get(opt_state_0),
+                    "iteration": iteration,
+                    "frames": frames,
+                    "hours": hours,
+                    "env_id": env.id,
+                    "env_version": env.version,
+                }
+                pickle.dump(dic, f)
 
         if iteration >= config.maximum_number_of_iterations:
             break

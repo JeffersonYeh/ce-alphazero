@@ -14,7 +14,7 @@ class Config(pydantic.BaseModel):
     debug: bool = False  # If True, automatically loads much smaller hps to make debugging easier
     seed: int | None = None  # If None, seeds automatically with a random large integer
     env_class: Literal["pgx", "safety", "custom"] = "safety"
-    env_id: pgx.EnvId | str = "safety-grid"
+    env_id: pgx.EnvId | str = "safety-gridworld"
     # env_id: pgx.EnvId | str = "safety-minatar-freeway"
     # env_id: pgx.EnvId | str = "subleq-negation-positive"
     subleq_tasks: list[str] = pydantic.Field(default_factory=lambda: ["NEGATION_POSITIVE"])
@@ -43,7 +43,7 @@ class Config(pydantic.BaseModel):
     )
     # TODO: This effectively gives the default action selection for MCTS based on visitation counts at the root
     # TODO: If we want one of the other methods we need to consider how they interact with shielding
-    sample_actions: bool = True
+    sample_actions: bool = False
     sample_from_improved_policy: bool = False
     rescale_q_values_in_search: bool = True
     uniform_search_policy: bool = (
@@ -79,18 +79,18 @@ class Config(pydantic.BaseModel):
         0.0  # used in selfplay in emctx for directed exploration
     )
     exploration_beta_c: Annotated[float, pydantic.Field(strict=True, ge=0.0)] = (
-        0.0  # used in selfplay in emctx for directed exploration
+        -1000.0  # used in selfplay in emctx for directed exploration
     )
     exploitation_beta_v: Annotated[float, pydantic.Field(strict=True, le=0.0)] = 0.0  # used in evaluation in emctx
-    exploitation_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = 0.0  # used in evaluation in emctx
+    exploitation_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = -1000.0  # used in evaluation in emctx
     reanalyze_beta_v: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
         0.0  # used in reanalyze in emctx for epistemically reliable targets
     )
     reanalyze_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
-        0.0  # used in reanalyze in emctx for epistemically reliable targets
+        -1000.0  # used in reanalyze in emctx for epistemically reliable targets
     )
-    beta_v_schedule: bool = True  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
-    beta_c_schedule: bool = True
+    beta_v_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
+    beta_c_schedule: bool = False
     # wandb and saving params
     results_path: str = "./evaluation_results"  # Defaults to an evaluation_results dir under src
     track: bool = True  # Whether to use WANDB or not. Disabled in debug

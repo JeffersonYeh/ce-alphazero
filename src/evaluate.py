@@ -16,11 +16,11 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
     batch_size = config.num_eval_episodes // len(context.devices)
 
     def cond_fn(tup: tuple[pgx.State, PRNGKey, Array, int]) -> bool:
-        states, _, _, counter = tup
+        states, _, _, _, counter = tup
         return jnp.logical_not(states.terminated.all()) & (counter <= config.max_episode_length)
 
-    def loop_fn(tup: tuple[pgx.State, PRNGKey, Array, int]) -> tuple[pgx.State, PRNGKey, Array, int]:
-        states, rng_key, sum_of_rewards, counter = tup
+    def loop_fn(tup: tuple[pgx.State, PRNGKey, Array, Array, int]) -> tuple[pgx.State, PRNGKey, Array, int]:
+        states, rng_key, sum_of_rewards, sum_of_costs, counter = tup
         rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
 
         network_output, _ = context.forward.apply(model_params, model_state, states.observation, is_training=False)
@@ -34,7 +34,6 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
         cost_value_epistemic_variance = network_output.cost_value_epistemic_variance
         _cost_epistemic_variance = network_output.cost_epistemic_variance
 
-        # TODO: Update to use costs
         root = emctx.EpistemicRootFnOutput(
             prior_logits=exploitation_logits,  # type: ignore
             value=value,  # type: ignore
@@ -42,7 +41,7 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
             embedding=states,  # type: ignore
             beta_v=config.exploitation_beta_v * jnp.ones_like(value),  # type: ignore
             beta_c=config.exploitation_beta_c * jnp.ones_like(value),  # type: ignore
-            cost_value=cost,
+            cost_value=cost_value,
             cost_value_epistemic_variance=cost_value_epistemic_variance,
             cost_threshold=_cost_epistemic_variance,
         )
@@ -59,12 +58,19 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
         keys = jax.random.split(key_for_next_step, batch_size)
         next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
         rewards = next_states.rewards[jnp.arange(states.rewards.shape[0]), states.current_player]
+        costs = jax.lax.cond(
+            "safety" in config.env_class,
+            lambda: next_states.costs[jnp.arange(states.rewards.shape[0]), states.current_player],
+            lambda: jnp.zeros(batch_size, dtype=jnp.float32),
+        )
         counter = counter + 1
-        return next_states, rng_key, sum_of_rewards + rewards, counter
+        return next_states, rng_key, sum_of_rewards + rewards, sum_of_costs + costs, counter
 
     rng_key, sub_key = jax.random.split(rng_key)
     keys = jax.random.split(sub_key, batch_size)
     states = jax.vmap(context.env.init)(keys)
 
-    states, _, sum_of_rewards, _ = jax.lax.while_loop(cond_fn, loop_fn, (states, rng_key, jnp.zeros(batch_size), 0))
-    return sum_of_rewards.mean()
+    states, _, sum_of_rewards, sum_of_costs, _ = jax.lax.while_loop(
+        cond_fn, loop_fn, (states, rng_key, jnp.zeros(batch_size), jnp.zeros(batch_size), 0)
+    )
+    return sum_of_rewards.mean(), sum_of_costs.mean()
