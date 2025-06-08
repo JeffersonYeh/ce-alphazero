@@ -76,7 +76,7 @@ def reanalyze(
     cost_value_epistemic_variance = network_output.cost_value_epistemic_variance
     _cost_epistemic_variance = network_output.cost_epistemic_variance
 
-    cost_threshold = jax.lax.cond(config.env_class == "safety", lambda: context.env.cost_threshold, lambda: 0.0)
+    cost_threshold = context.env.cost_threshold
 
     root = emctx.EpistemicRootFnOutput(
         prior_logits=exploitation_logits,  # type: ignore

@@ -102,7 +102,7 @@ def selfplay(
 
         selfplay_beta_v = jax.lax.cond(config.directed_exploration, lambda: config.exploration_beta_v, lambda: 0.0)
         selfplay_beta_c = jax.lax.cond(config.safe_exploration, lambda: config.exploration_beta_c, lambda: 0.0)
-        cost_threshold = jax.lax.cond(config.env_class == "safety", lambda: context.env.cost_threshold, lambda: 0.0)
+        cost_threshold = context.env.cost_threshold
         policy_logits = jax.lax.cond(
             config.directed_exploration,
             lambda: exploration_logits,
@@ -138,8 +138,8 @@ def selfplay(
         search_summary = policy_output.search_tree.epistemic_summary()
         root_values = search_summary.value
         root_epistemic_stds = search_summary.value_epistemic_std
-        root_cost_values = search_summary.cost_value if config.env_class == "safety" else None
-        root_cost_epistemic_stds = search_summary.cost_value_epistemic_std if config.env_class == "safety" else None
+        root_cost_values = search_summary.cost_value
+        root_cost_epistemic_stds = search_summary.cost_value_epistemic_std
         # Note: for GumbelMZ this is essentially det. argmax, while for MZ (PUCT) this is sampled from counts.
         action_chosen_by_search_tree = policy_output.action
         # Sample from visits
@@ -165,9 +165,7 @@ def selfplay(
             cost_value_prediction=cost_value,
             value_prediction_epistemic_variance=value_epistemic_variance,  # NOTE: We consider here that cost UBE and value UBE prediction are the same
             q_values_epistemic_variance=search_summary.qvalues_epistemic_variance,  # type: ignore
-            q_cost_epistemic_variance=(
-                search_summary.cost_qvalues_epistemic_variance if config.env_class == "safety" else None
-            ),
+            q_cost_epistemic_variance=search_summary.cost_qvalues_epistemic_variance,
         )
 
     rng_key, sub_key = jax.random.split(rng_key)

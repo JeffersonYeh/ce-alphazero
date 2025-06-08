@@ -121,7 +121,6 @@ def get_epistemic_recurrent_fn(
     exploration: bool,
     discount: float,
     two_players_game: bool,
-    safety: bool,
 ) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
         model: Model,
@@ -160,11 +159,9 @@ def get_epistemic_recurrent_fn(
         batched_discount = jax.lax.cond(two_players_game, lambda: batched_discount * -1.0, lambda: batched_discount)  # type: ignore
         batched_discount = jnp.where(state.terminated, 0.0, batched_discount)
 
-        cost = state.costs[jnp.arange(state.rewards.shape[0]), current_player] if safety else None
-        cost_value = jnp.where(state.terminated, 0.0, cost_value) if safety else None
-        cost_value_epistemic_variance = (
-            jnp.where(state.terminated, 0.0, cost_value_epistemic_variance) if safety else None
-        )
+        cost = state.costs[jnp.arange(state.rewards.shape[0]), current_player]
+        cost_value = jnp.where(state.terminated, 0.0, cost_value)
+        cost_value_epistemic_variance = jnp.where(state.terminated, 0.0, cost_value_epistemic_variance)
 
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
             reward=reward,  # type: ignore

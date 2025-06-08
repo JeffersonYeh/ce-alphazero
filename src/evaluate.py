@@ -58,11 +58,7 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
         keys = jax.random.split(key_for_next_step, batch_size)
         next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
         rewards = next_states.rewards[jnp.arange(states.rewards.shape[0]), states.current_player]
-        costs = jax.lax.cond(
-            "safety" in config.env_class,
-            lambda: next_states.costs[jnp.arange(states.rewards.shape[0]), states.current_player],
-            lambda: jnp.zeros(batch_size, dtype=jnp.float32),
-        )
+        costs = next_states.costs[jnp.arange(states.rewards.shape[0]), states.current_player]
         counter = counter + 1
         return next_states, rng_key, sum_of_rewards + rewards, sum_of_costs + costs, counter
 

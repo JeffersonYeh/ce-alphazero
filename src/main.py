@@ -276,7 +276,6 @@ def main() -> None:
             exploration=config.directed_exploration,
             discount=config.discount,
             two_players_game=config.two_players_game,
-            safety="safety" in config.env_class,
         ),
         reanalyze_recurrent_fn=get_epistemic_recurrent_fn(
             env=env,
@@ -285,7 +284,6 @@ def main() -> None:
             exploration=False,
             discount=config.discount,
             two_players_game=config.two_players_game,
-            safety="safety" in config.env_class,
         ),
         evaluation_recurrent_fn=get_epistemic_recurrent_fn(
             env=env,
@@ -294,7 +292,6 @@ def main() -> None:
             exploration=False,
             discount=config.discount,
             two_players_game=config.two_players_game,
-            safety="safety" in config.env_class,
         ),
         optimizer=optimizer,
         scale_uncertainty_losses=config.scale_uncertainty_losses,
