@@ -55,6 +55,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             num_actions=env.num_actions,
             num_channels=config.num_channels,
             max_ube=config.max_ube,
+            cost_threshold=env.cost_threshold,
             discount=config.discount,
             hidden_layers_size=config.linear_layer_size,
             hash_class=hash_class,

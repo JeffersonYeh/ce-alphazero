@@ -103,11 +103,9 @@ def reanalyze(
     # Value from the tree
     # TODO: There is no saving the action selection here, this action is from gumbel and is unshielded
     value_target_from_tree = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
-    cost_value_target_from_tree = (
-        search_summary.cost_qvalues[jnp.arange(search_summary.cost_qvalues.shape[0]), policy_output.action]
-        if cost_value is not None
-        else None
-    )
+    cost_value_target_from_tree = search_summary.cost_qvalues[
+        jnp.arange(search_summary.cost_qvalues.shape[0]), policy_output.action
+    ]
 
     # Get value prediction for next_state
     network_output_next_state, _ = context.forward.apply(
@@ -129,11 +127,8 @@ def reanalyze(
     )
 
     # Compute 1-step td target for the cost with: cost_target = cost + gamma * (not teminal) * cost_value_prediction(next observation)
-    cost_value_target_from_td = (
-        experience_pair.second.costs.squeeze()
-        + config.discount * cost_value_next_state * (~experience_pair.second.terminated)
-        if cost_value_next_state is not None
-        else None
+    cost_value_target_from_td = experience_pair.second.costs.squeeze() + config.discount * cost_value_next_state * (
+        ~experience_pair.second.terminated
     )
 
     chex.assert_equal_shape(
@@ -150,15 +145,12 @@ def reanalyze(
     # the tree's prediction may be bad, because the rewarding action might not have been searched
     # So - we return the max over both
     value_target = jnp.maximum(value_target_from_tree, value_target_from_td)
-    cost_value_target = (
-        jnp.maximum(cost_value_target_from_tree, cost_value_target_from_td)
-        if cost_value_next_state is not None
-        else None
-    )
+    cost_value_target = jnp.maximum(cost_value_target_from_tree, cost_value_target_from_td)
 
-    exploration_ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
-    exploitation_ube_target = search_summary.qvalues_epistemic_variance[
-        jnp.arange(search_summary.qvalues_epistemic_variance.shape[0]), policy_output.action
+    normalized_qvalue_epistemic_variance = search_summary.qvalues_epistemic_variance / config.max_ube
+    exploration_ube_target = jnp.max(normalized_qvalue_epistemic_variance, axis=1)
+    exploitation_ube_target = normalized_qvalue_epistemic_variance[
+        jnp.arange(normalized_qvalue_epistemic_variance.shape[0]), policy_output.action
     ]
     chex.assert_equal_shape([exploration_ube_target, exploitation_ube_target])
     ube_target = jax.lax.cond(
@@ -169,7 +161,7 @@ def reanalyze(
     # The correct target from terminal states for value and UBE is zero.
     value_target = value_target * (~states.terminated)
     ube_target = ube_target * (~states.terminated)
-    cost_value_target = cost_value_target * (~states.terminated) if cost_value_next_state is not None else None
+    cost_value_target = cost_value_target * (~states.terminated)
 
     completed_q_and_std_scores: Array = mask_invalid_actions(
         jax.vmap(complete_qs)(

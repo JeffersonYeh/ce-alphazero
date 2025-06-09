@@ -43,7 +43,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     # Compute losses
     # We scale the value target by value_scale, because value pred. is between [-1,1] for stability
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
-    cost_value_loss = optax.l2_loss(cost_value, reanalyze_output.cost_value_target) if cost_value is not None else None
+    cost_value_loss = optax.l2_loss(cost_value, reanalyze_output.cost_value_target)
     # We scale the ube target by ube_scale, because ube pred. is between [0,1] for stability
     ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
     exploitation_policy_loss = optax.softmax_cross_entropy(

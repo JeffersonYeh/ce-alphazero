@@ -10,7 +10,7 @@ from typing import Literal
 ENV_ID = "safety_grid"
 
 MAP_SIZE = jnp.int32(4)  # MAP_SIZE**2 must be divisible by 4 due to hashing function used
-REWARD_MAP = jnp.float32([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 10]])
+REWARD_MAP = jnp.float32([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1]])
 
 REWARD_LOC = jnp.square(MAP_SIZE) - 1
 
@@ -21,7 +21,7 @@ COST_MAP = jnp.float32([[0, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 0], [1, 0, 0, 0]])
 #             (1, 2) : jnp.float32(1),
 #             # (3, 3) : jnp.float32(1),
 #             }
-COST_CAP = jnp.float32(0.0)
+COST_THRESHOLD = jnp.float32(0.0)
 
 
 @dataclass
@@ -54,7 +54,7 @@ class SafetyGrid(pgx.Env):
         grid_size=MAP_SIZE,
         reward_map=REWARD_MAP,
         cost_map=COST_MAP,
-        cost_cap=COST_CAP,
+        cost_threshold=COST_THRESHOLD,
         reward_loc=REWARD_LOC,
         max_steps=40,
     ):
@@ -63,10 +63,7 @@ class SafetyGrid(pgx.Env):
         self.reward_map = reward_map
         self.reward_loc = reward_loc
         self.cost_map = cost_map
-        self.cost_cap = cost_cap
-
-        # TODO: Rename
-        self.cost_threshold = cost_cap
+        self.cost_threshold = cost_threshold
 
     @property
     def id(self) -> pgx.EnvId:
@@ -154,7 +151,7 @@ class SafetyGrid(pgx.Env):
         # update termination
         new_terminated = (
             (state._step_count >= self.max_steps)
-            | (new_cum_costs[0] > self.cost_cap)
+            | (new_cum_costs[0] > self.cost_threshold)
             | (pos_flat_idx == self.reward_loc)
         )
         new_terminated = jnp.bool_(new_terminated)

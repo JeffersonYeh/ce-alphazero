@@ -28,9 +28,13 @@ class Config(pydantic.BaseModel):
     # Local uncertainty parameters
     hash_class: Literal["SimHash", "LCGHash", "XXHash"] = "XXHash"
     hash_path: str = "minatar_az_net/xxhash32"
-    max_epistemic_variance_reward: float = 1.0
+    # TODO: This is only correct if R_max=1
+    max_epistemic_variance_reward: float = 1.0  # R_max^2
     subleq_hash_only_io: bool = True
     # UBE parameters
+    # TODO: This should be the same only if both cost and rewards are scaled the same
+    # NOTE: This is effectively Cost_threshold for cost uncertainty and something like (upper bound):
+    # NOTE: max_ube = V_max^2, where V_max = R_max * H and H is the horizon
     max_ube: float = 1.0  # Approx. max_value ** 2, used to bound the predictions of UBE
     exploration_ube_target: bool = True  # If true, ube target is max_child_unc. Otherwise, it's chosen child's unc.
     # selfplay
@@ -79,15 +83,15 @@ class Config(pydantic.BaseModel):
         0.0  # used in selfplay in emctx for directed exploration
     )
     exploration_beta_c: Annotated[float, pydantic.Field(strict=True, ge=0.0)] = (
-        -1000.0  # used in selfplay in emctx for directed exploration
+        -1.0  # used in selfplay in emctx for directed exploration
     )
     exploitation_beta_v: Annotated[float, pydantic.Field(strict=True, le=0.0)] = 0.0  # used in evaluation in emctx
-    exploitation_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = -1000.0  # used in evaluation in emctx
+    exploitation_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = -1.0  # used in evaluation in emctx
     reanalyze_beta_v: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
         0.0  # used in reanalyze in emctx for epistemically reliable targets
     )
     reanalyze_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
-        -1000.0  # used in reanalyze in emctx for epistemically reliable targets
+        -1.0  # used in reanalyze in emctx for epistemically reliable targets
     )
     beta_v_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     beta_c_schedule: bool = False

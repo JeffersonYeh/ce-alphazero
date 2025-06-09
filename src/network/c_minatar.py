@@ -26,6 +26,7 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         num_channels: int = 16,
         hidden_layers_size: int = 64,
         max_ube: float = 1.0,
+        cost_threshold: float = 1.0,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
         hash_class: Type = SimHash,
@@ -49,6 +50,7 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
         self.max_u = max_ube
+        self.cost_threshold = cost_threshold
         discount = min(discount, 0.9997)
         self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount**2)
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
@@ -84,6 +86,7 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         c = hk.Linear(self.hidden_layers_size)(x1)
         c = jax.nn.relu(c)
         c = hk.Linear(1)(c)
+        c = jax.nn.softplus(c)  # NOTE: Unlike values, costs are always positive
         # c = jnp.tanh(c)
         c = c.reshape((-1,))
 
@@ -105,16 +108,19 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         u = hk.Linear(self.hidden_layers_size)(x2)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
-        u = jax.nn.softplus(u)
+        # u = jax.nn.softplus(u)
         # Note that u is a scalar between 0 and 1, 1 representing max unc. This is done for stability and learning speed
-        # u = 0.5 * (jnp.tanh(u) + 1)
+        u = 0.5 * (jnp.tanh(u) + 1)
         u = u.reshape((-1,))
+
+        # TODO: Should cost uncertainty be different from value uncertainty in the same state?
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
         scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
 
         if not is_training:
+            # NOTE: This is what we give during the expand step of EMCTS as the epistemic uncertainty of the value prediction at the state
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
             u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
             u = u.clip(min=0, max=self.max_u)
@@ -126,10 +132,11 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
             exploitation_logits=main_policy_logits,
             exploration_logits=exploration_policy_logits,
             value=v,
-            value_epistemic_variance=u,
+            value_epistemic_variance=u * self.max_u,  # NOTE: V[value] is between 0 and v_max^2
             reward_epistemic_variance=scaled_state_novelty,
             cost_value=c,
-            cost_value_epistemic_variance=u,
+            cost_value_epistemic_variance=u
+            * (self.cost_threshold + 1) ** 2,  # NOTE: V[cost] is between 0 and cost_threshold^2
             cost_epistemic_variance=scaled_state_novelty,
         )
 

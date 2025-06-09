@@ -16,6 +16,8 @@ import pgx  # type: ignore
 import wandb
 from pgx.experimental import auto_reset  # type: ignore
 from flashbax.vault import Vault
+import matplotlib.pyplot as plt
+import cemctx as emctx
 
 from config import Config, setup_config
 from context import Context, get_epistemic_recurrent_fn, get_forward_fn
@@ -28,9 +30,7 @@ from reanalyze import reanalyze
 from selfplay import selfplay, uniformrandomplay
 from train import train
 
-from type_aliases import PRNGKey, Array
-
-# TODO: Remove python If statements
+from type_aliases import PRNGKey, Array, Model
 
 
 class TimeoutTerminationWrapper(pgx.Env):
@@ -335,6 +335,175 @@ def main() -> None:
                 log.update({"mean_return": mean_return.item()})
                 log.update({"mean_cost": mean_cost.item()})
 
+            if env.id == "safety_grid":
+                # Evaluate value, cost, and uncertainties for all grid states
+                grid_size = context.env.grid_size
+
+                # Create all possible pgx states for the grid
+                all_states = []
+                for i in range(grid_size):
+                    for j in range(grid_size):
+                        # Create a blank state
+                        state = env.init(jax.random.PRNGKey(0))
+                        obs = jnp.zeros_like(state.observation)
+                        obs = obs.at[i, j].set(1)
+                        state = state.replace(observation=obs)
+                        all_states.append(state)
+                all_states = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *all_states)
+
+                # Forward pass
+                model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
+                model_params, model_state = model_0
+                network_output, _ = context.forward.apply(
+                    model_params, model_state, all_states.observation, is_training=False
+                )
+
+                value = network_output.value.reshape(grid_size, grid_size)
+                value_uncertainty = network_output.value_epistemic_variance.reshape(grid_size, grid_size)
+                cost_value = network_output.cost_value.reshape(grid_size, grid_size)
+                cost_uncertainty = network_output.cost_value_epistemic_variance.reshape(grid_size, grid_size)
+
+                # Get policies from policy networks
+                exploration_action = (
+                    jnp.argmax(network_output.exploration_logits, axis=-1)
+                    .astype(jnp.int32)
+                    .reshape(grid_size, grid_size)
+                )
+                exploitation_action = (
+                    jnp.argmax(network_output.exploitation_logits, axis=-1)
+                    .astype(jnp.int32)
+                    .reshape(grid_size, grid_size)
+                )
+
+                # Get policies from tree root
+                rng_key, subkey = jax.random.split(rng_key)
+                safety_grid_recurrent_fn = get_epistemic_recurrent_fn(
+                    env=env,
+                    forward=forward,
+                    batch_size=network_output.exploitation_logits.shape[0],
+                    exploration=False,
+                    discount=config.discount,
+                    two_players_game=config.two_players_game,
+                )
+
+                root = emctx.EpistemicRootFnOutput(
+                    prior_logits=network_output.exploration_logits,  # type: ignore
+                    value=network_output.value,  # type: ignore
+                    value_epistemic_variance=network_output.value_epistemic_variance,  # type: ignore
+                    embedding=all_states,  # type: ignore
+                    beta_v=config.exploitation_beta_v * jnp.ones_like(network_output.value),  # type: ignore
+                    beta_c=config.exploitation_beta_c * jnp.ones_like(network_output.value),  # type: ignore
+                    cost_value=network_output.cost_value,
+                    cost_value_epistemic_variance=network_output.cost_value_epistemic_variance,
+                    cost_threshold=network_output.cost_epistemic_variance,
+                )
+                policy_output = emctx.epistemic_gumbel_muzero_policy(
+                    params=model_0,
+                    rng_key=subkey,
+                    root=root,
+                    recurrent_fn=safety_grid_recurrent_fn,
+                    num_simulations=config.selfplay_simulations_per_step,
+                    invalid_actions=jnp.zeros_like(network_output.exploration_logits),
+                    qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore
+                    gumbel_scale=0.0,
+                )
+
+                emcts_action = policy_output.action.reshape(grid_size, grid_size)
+
+                fig, axs = plt.subplots(1, 5, figsize=(20, 5))
+
+                # Value Uncertainty as color, Value as text
+                im0 = axs[0].imshow(value_uncertainty, cmap="plasma")
+                axs[0].set_title("Value (text), Value Uncertainty (color)")
+                plt.colorbar(im0, ax=axs[0])
+                for row in range(grid_size):
+                    for col in range(grid_size):
+                        val = value[row, col]
+                        # Green if reward, else default
+                        color = "green" if env.reward_map[row, col] > 0 else "black"
+                        axs[0].text(
+                            col,
+                            row,
+                            f"{val:.2f}",
+                            ha="center",
+                            va="center",
+                            color=color,
+                            fontsize=12,
+                            fontweight="bold",
+                        )
+
+                # Cost Uncertainty as color, Cost as text
+                im1 = axs[1].imshow(cost_uncertainty, cmap="plasma")
+                axs[1].set_title("Cost (text), Cost Uncertainty (color)")
+                plt.colorbar(im1, ax=axs[1])
+                for row in range(grid_size):
+                    for col in range(grid_size):
+                        cval = cost_value[row, col]
+                        # Red if cost, else default
+                        color = "red" if env.cost_map[row, col] > 0 else "black"
+                        axs[1].text(
+                            col,
+                            row,
+                            f"{cval:.2f}",
+                            ha="center",
+                            va="center",
+                            color=color,
+                            fontsize=12,
+                            fontweight="bold",
+                        )
+
+                # --- Action visualization helper ---
+                def plot_action_arrows(ax, action_grid, title):
+                    # Map: 0=U, 1=D, 2=L, 3=R
+                    dx = jnp.zeros_like(action_grid, dtype=float)
+                    dy = jnp.zeros_like(action_grid, dtype=float)
+                    dx = dx.at[action_grid == 2].set(-1)  # Left
+                    dx = dx.at[action_grid == 3].set(1)  # Right
+                    dy = dy.at[action_grid == 0].set(-1)  # Up
+                    dy = dy.at[action_grid == 1].set(1)  # Down
+                    X, Y = jnp.meshgrid(jnp.arange(grid_size), jnp.arange(grid_size))
+                    ax.imshow(jnp.zeros_like(action_grid), cmap="gray", vmin=0, vmax=1, zorder=0)  # blank grid
+                    ax.set_facecolor("white")
+                    # Set minor ticks after imshow
+                    ax.set_xticks(jnp.arange(-0.5, grid_size, 1), minor=True)
+                    ax.set_yticks(jnp.arange(-0.5, grid_size, 1), minor=True)
+                    # Draw grid lines on top
+                    ax.grid(which="minor", color="#222", linestyle="-", linewidth=2, zorder=2)
+                    # Draw arrows
+                    ax.quiver(
+                        X,
+                        Y,
+                        dx,
+                        dy,
+                        angles="xy",
+                        scale_units="xy",
+                        scale=2.5,
+                        color="blue",
+                        width=0.008,
+                        zorder=3,
+                        pivot="middle",
+                    )
+                    ax.set_title(title)
+                    ax.set_xticks(jnp.arange(grid_size))
+                    ax.set_yticks(jnp.arange(grid_size))
+                    ax.set_xlim(-0.5, grid_size - 0.5)
+                    ax.set_ylim(-0.5, grid_size - 0.5)
+                    ax.invert_yaxis()
+
+                # Plot exploration actions
+                plot_action_arrows(axs[2], exploration_action, "Exploration Action (arrows)")
+                # Plot exploitation actions
+                plot_action_arrows(axs[3], exploitation_action, "Exploitation Action (arrows)")
+                # Plot emcts actions
+                plot_action_arrows(axs[4], emcts_action, "EMCTS Action (arrows)")
+
+                plt.tight_layout()
+                try:
+                    wandb.log({"grid/value_cost_uncertainty_and_actions": wandb.Image(fig)})
+                except Exception as e:
+                    print(f"[Visualization] wandb logging failed: {e}")
+                plt.close(fig)
+
             mean_returns_list.append(mean_return)
             mean_costs_list.append(mean_cost)
             frames_at_mean_returns_list.append(frames)
@@ -526,7 +695,7 @@ def main() -> None:
                 # Keep track of losses for logging.
                 # `.mean()` because we get a separate loss per device.
                 value_loss_list.append(value_loss.mean().item())
-                cost_value_loss_list.append(cost_value_loss.mean().item() if cost_value_loss is not None else 0.0)
+                cost_value_loss_list.append(cost_value_loss.mean().item())
                 ube_loss_list.append(ube_loss.mean().item())
                 exploitation_policy_loss_list.append(exploitation_policy_loss.mean().item())
                 exploration_policy_loss_list.append(exploration_policy_loss.mean().item())
