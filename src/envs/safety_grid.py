@@ -38,7 +38,7 @@ ENV_ID = "safety_grid"
 MAP_SIZE = jnp.int32(4)  # MAP_SIZE**2 must be divisible by 4 due to hashing function used
 REWARD_MAP = jnp.float32([[0, 0, 0, 1], [0, 0, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0]])
 
-REWARD_LOC = jnp.square(MAP_SIZE) - 1
+REWARD_LOCS = jnp.argwhere(REWARD_MAP > 0)
 
 COST_MAP = jnp.float32([[0, 0, 0, 1], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
 
@@ -76,13 +76,13 @@ class SafetyGrid(pgx.Env):
         reward_map=REWARD_MAP,
         cost_map=COST_MAP,
         cost_threshold=COST_THRESHOLD,
-        reward_loc=REWARD_LOC,
+        reward_locs=REWARD_LOCS,
         max_steps=40,
     ):
         self.grid_size = grid_size
         self.max_steps = max_steps
         self.reward_map = reward_map
-        self.reward_loc = reward_loc
+        self.reward_locs = reward_locs
         self.cost_map = cost_map
         self.cost_threshold = cost_threshold
 
@@ -212,7 +212,7 @@ class SafetyGrid(pgx.Env):
         # update termination
         new_terminated = (
             (state._step_count >= self.max_steps)
-            | (pos_flat_idx == self.reward_loc)
+            | (jnp.any(self.reward_locs == pos_flat_idx))
             | (new_cum_costs[0] > self.cost_threshold)
         )
         new_terminated = jnp.bool_(new_terminated)
