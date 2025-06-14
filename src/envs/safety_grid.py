@@ -2,25 +2,46 @@ import chex
 import jax
 import jax.numpy as jnp
 import pgx  # type: ignore
+import pgx.core as core
 from pgx._src.struct import dataclass  # type: ignore
 
 from type_aliases import Array, PRNGKey
-from typing import Literal
+from typing import Literal, Optional
 
 ENV_ID = "safety_grid"
 
+# MAP_SIZE = jnp.int32(6)  # MAP_SIZE**2 must be divisible by 4 due to hashing function used
+# REWARD_MAP = jnp.float32(
+#     [
+#         [0, 0, 0, 0, 0, 0],
+#         [0, 0, 0, 0, 0, 0],
+#         [0, 0, 0, 0, 0, 0],
+#         [0, 0, 0, 0, 0, 0],
+#         [0, 0, 0, 0, 0, 0],
+#         [0, 0, 0, 0, 0, 1],
+#     ]
+# )
+
+# REWARD_LOC = jnp.square(MAP_SIZE) - 1
+
+# COST_MAP = jnp.float32(
+#     [
+#         [0, 0, 0, 0, 0, 0],
+#         [1, 1, 1, 1, 1, 0],
+#         [0, 0, 0, 0, 0, 0],
+#         [0, 1, 1, 1, 1, 1],
+#         [0, 0, 0, 0, 0, 0],
+#         [1, 1, 1, 1, 1, 0],
+#     ]
+# )
+
 MAP_SIZE = jnp.int32(4)  # MAP_SIZE**2 must be divisible by 4 due to hashing function used
-REWARD_MAP = jnp.float32([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1]])
+REWARD_MAP = jnp.float32([[0, 0, 0, 1], [0, 0, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0]])
 
 REWARD_LOC = jnp.square(MAP_SIZE) - 1
 
-COST_MAP = jnp.float32([[0, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 0], [1, 0, 0, 0]])
+COST_MAP = jnp.float32([[0, 0, 0, 1], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
 
-# REWARD_MAP = {(3, 3) : jnp.float32(10.0)}
-# COST_MAP = {(3, 1) : jnp.float32(1),
-#             (1, 2) : jnp.float32(1),
-#             # (3, 3) : jnp.float32(1),
-#             }
 COST_THRESHOLD = jnp.float32(0.0)
 
 
@@ -77,6 +98,45 @@ class SafetyGrid(pgx.Env):
         """
         return "0.0.1"
 
+    def step(
+        self,
+        state: core.State,
+        action: Array,
+        key: Optional[Array] = None,
+    ) -> core.State:
+        """Step function."""
+        is_illegal = ~state.legal_action_mask[action]
+        current_player = state.current_player
+
+        # If the state is already terminated or truncated, environment does not take usual step,
+        # but return the same state with zero-rewards for all players
+        state = jax.lax.cond(
+            (state.terminated | state.truncated),
+            lambda: state.replace(rewards=jnp.zeros_like(state.rewards), costs=jnp.zeros_like(state.costs)),  # type: ignore
+            lambda: self._step(state.replace(_step_count=state._step_count + 1), action, key),  # type: ignore
+        )
+
+        # Taking illegal action leads to immediate game terminal with negative reward
+        state = jax.lax.cond(
+            is_illegal,
+            lambda: self._step_with_illegal_action(state, current_player),
+            lambda: state,
+        )
+
+        # All legal_action_mask elements are **TRUE** at terminal state
+        # This is to avoid zero-division error when normalizing action probability
+        # Taking any action at terminal state does not give any effect to the state
+        state = jax.lax.cond(
+            state.terminated,
+            lambda: state.replace(legal_action_mask=jnp.ones_like(state.legal_action_mask)),  # type: ignore
+            lambda: state,
+        )
+
+        observation = self.observe(state)
+        state = state.replace(observation=observation)  # type: ignore
+
+        return state
+
     @property
     def num_players(self) -> int:
         """Number of players (e.g., 2 in Tic-tac-toe)"""
@@ -107,6 +167,7 @@ class SafetyGrid(pgx.Env):
 
         return position
 
+    # TODO: Make sure that terminated states are not updated
     def _step(self, state: SafetyGridState, action: Array, key: PRNGKey) -> SafetyGridState:
         assert isinstance(state, SafetyGridState)
         assert action.ndim == 0  # check action is a number =>  U=0, D=1, L=2, R=3
@@ -151,8 +212,8 @@ class SafetyGrid(pgx.Env):
         # update termination
         new_terminated = (
             (state._step_count >= self.max_steps)
-            | (new_cum_costs[0] > self.cost_threshold)
             | (pos_flat_idx == self.reward_loc)
+            | (new_cum_costs[0] > self.cost_threshold)
         )
         new_terminated = jnp.bool_(new_terminated)
 

@@ -25,7 +25,6 @@ class LossOutput(NamedTuple):
     batch_novelty: chex.Array
 
 
-# TODO: Go over these once more to see if cost loss is properly implemented
 def loss_fn(model_params, model_state, context: Context, reanalyze_output: ReanalyzeOutput):
     network_output, model_state = context.forward.apply(
         model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
@@ -45,6 +44,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
     cost_value_loss = optax.l2_loss(cost_value, reanalyze_output.cost_value_target)
     # We scale the ube target by ube_scale, because ube pred. is between [0,1] for stability
+    # TODO: It should be value_epistemic_variance / config.max_ube, but thats the same for now
     ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
     exploitation_policy_loss = optax.softmax_cross_entropy(
         exploitation_logits, reanalyze_output.exploitation_policy_target
@@ -67,7 +67,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         epistemic_loss_weights * (value_loss + exploitation_policy_loss)
         + exploration_policy_loss
         + ube_loss
-        + jax.lax.cond(cost_value_loss is None, lambda: jnp.zeros_like(value_loss), lambda: cost_value_loss)
+        + cost_value_loss
     )
 
     # Compute error for priority:

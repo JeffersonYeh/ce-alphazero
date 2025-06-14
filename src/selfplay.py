@@ -123,16 +123,16 @@ def selfplay(
             cost_value_epistemic_variance=cost_value_epistemic_variance,
             cost_threshold=cost_threshold * jnp.ones_like(value),
         )
-        policy_output = emctx.epistemic_gumbel_muzero_policy(
+        policy_output = emctx.epistemic_muzero_policy(
             params=model,
             rng_key=key1,
             root=root,
             recurrent_fn=context.selfplay_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
-            qtransform=partial(
-                emctx.epistemic_qtransform_completed_by_mix_value, rescale_values=config.rescale_q_values_in_search
-            ),  # type: ignore
+            # qtransform=partial(
+            #     emctx.epistemic_qtransform_completed_by_mix_value, rescale_values=config.rescale_q_values_in_search
+            # ),  # type: ignore
         )
         keys = jax.random.split(key2, self_play_batch_size)
         search_summary = policy_output.search_tree.epistemic_summary()

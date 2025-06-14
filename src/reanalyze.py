@@ -90,14 +90,14 @@ def reanalyze(
         cost_threshold=cost_threshold * jnp.ones_like(value),
     )
 
-    policy_output = emctx.epistemic_gumbel_muzero_policy(
+    policy_output = emctx.epistemic_muzero_policy(
         params=model,
         rng_key=rng_key,
         root=root,
         recurrent_fn=context.reanalyze_recurrent_fn,
         num_simulations=config.reanalyze_simulations_per_step,
         invalid_actions=invalid_actions,
-        qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore  # TODO: Fix the type in emctx
+        # qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore  # TODO: Fix the type in emctx
     )
     search_summary = policy_output.search_tree.epistemic_summary()
     # Value from the tree

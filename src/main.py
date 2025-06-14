@@ -298,10 +298,15 @@ def main() -> None:
         hash_path=config.hash_path,  # TODO: Automatically figure this out
         exploration_beta=config.exploration_beta_v,
         max_ube=config.max_ube,
+        max_ube_cost=config.max_ube_cost,
         weigh_losses=config.weigh_losses,
         loss_weighting_temperature=config.loss_weighting_temperature,
         directed_exploration=config.directed_exploration,
     )
+
+    if config.beta_c_schedule:
+        initial_exploration_beta_c = config.exploration_beta_c
+        initial_reanalyze_beta_c = config.reanalyze_beta_c
 
     # Training loop
     while True:
@@ -310,30 +315,39 @@ def main() -> None:
             wandb.log(log)
         log = {}
 
+        # Beta_c scheduling
+        if config.beta_c_schedule:
+            # Linearly interpolate beta_c from config.exploration_beta_c to config.exploitation_beta_c over config.beta_c_schedule_timescale iterations
+            progress = min(iteration / config.beta_c_schedule_timescale, 1.0)
+            config.exploration_beta_c = (
+                1 - progress
+            ) * initial_exploration_beta_c + config.exploitation_beta_c * progress
+            config.reanalyze_beta_c = (1 - progress) * initial_reanalyze_beta_c + config.exploitation_beta_c * progress
+
         if iteration % config.eval_interval == 0:
             # Evaluate network.
             mean_return = None
             mean_cost = None
             # TODO: This can be used to test different beta_c configs
-            if config.exploitation_beta_v < 0:
-                # Do regular evaluation
-                original_exploitation_beta = config.exploitation_beta_v
-                config.exploitation_beta_v = 0.0
-                rng_key, subkey = jax.random.split(rng_key)
-                mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-                log.update({"regular mean_return": mean_return.item()})
-                log.update({"regular mean_cost": mean_cost.item()})
-                # And then do pessim_evaluation
-                config.exploitation_beta_v = original_exploitation_beta
-                rng_key, subkey = jax.random.split(rng_key)
-                mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-                log.update({"pessimistic_evaluation mean_return": mean_return.item()})
-                log.update({"pessimistic_evaluation mean_cost": mean_cost.item()})
-            else:
-                rng_key, subkey = jax.random.split(rng_key)
-                mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-                log.update({"mean_return": mean_return.item()})
-                log.update({"mean_cost": mean_cost.item()})
+            # if config.exploitation_beta_v < 0:
+            #     # Do regular evaluation
+            #     original_exploitation_beta = config.exploitation_beta_v
+            #     config.exploitation_beta_v = 0.0
+            #     rng_key, subkey = jax.random.split(rng_key)
+            #     mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+            #     log.update({"regular mean_return": mean_return.item()})
+            #     log.update({"regular mean_cost": mean_cost.item()})
+            #     # And then do pessim_evaluation
+            #     config.exploitation_beta_v = original_exploitation_beta
+            #     rng_key, subkey = jax.random.split(rng_key)
+            #     mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+            #     log.update({"pessimistic_evaluation mean_return": mean_return.item()})
+            #     log.update({"pessimistic_evaluation mean_cost": mean_cost.item()})
+            # else:
+            rng_key, subkey = jax.random.split(rng_key)
+            mean_return, mean_cost = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+            log.update({"mean_return": mean_return.item()})
+            log.update({"mean_cost": mean_cost.item()})
 
             if env.id == "safety_grid":
                 # Evaluate value, cost, and uncertainties for all grid states
@@ -387,7 +401,7 @@ def main() -> None:
                 )
 
                 root = emctx.EpistemicRootFnOutput(
-                    prior_logits=network_output.exploration_logits,  # type: ignore
+                    prior_logits=network_output.exploitation_logits,  # type: ignore
                     value=network_output.value,  # type: ignore
                     value_epistemic_variance=network_output.value_epistemic_variance,  # type: ignore
                     embedding=all_states,  # type: ignore
@@ -395,17 +409,17 @@ def main() -> None:
                     beta_c=config.exploitation_beta_c * jnp.ones_like(network_output.value),  # type: ignore
                     cost_value=network_output.cost_value,
                     cost_value_epistemic_variance=network_output.cost_value_epistemic_variance,
-                    cost_threshold=network_output.cost_epistemic_variance,
+                    cost_threshold=context.env.cost_threshold * jnp.ones_like(network_output.value),
                 )
-                policy_output = emctx.epistemic_gumbel_muzero_policy(
+                policy_output = emctx.epistemic_muzero_policy(
                     params=model_0,
                     rng_key=subkey,
                     root=root,
                     recurrent_fn=safety_grid_recurrent_fn,
                     num_simulations=config.selfplay_simulations_per_step,
                     invalid_actions=jnp.zeros_like(network_output.exploration_logits),
-                    qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore
-                    gumbel_scale=0.0,
+                    # qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore
+                    # gumbel_scale=0.0,
                 )
 
                 emcts_action = policy_output.action.reshape(grid_size, grid_size)
@@ -416,11 +430,25 @@ def main() -> None:
                 im0 = axs[0].imshow(value_uncertainty, cmap="plasma")
                 axs[0].set_title("Value (text), Value Uncertainty (color)")
                 plt.colorbar(im0, ax=axs[0])
+
+                # Cost Uncertainty as color, Cost as text
+                im1 = axs[1].imshow(cost_uncertainty, cmap="plasma")
+                axs[1].set_title("Cost (text), Cost Uncertainty (color)")
+                plt.colorbar(im1, ax=axs[1])
+
                 for row in range(grid_size):
                     for col in range(grid_size):
                         val = value[row, col]
-                        # Green if reward, else default
-                        color = "green" if env.reward_map[row, col] > 0 else "black"
+                        cval = cost_value[row, col]
+
+                        color = "black"
+                        if env.reward_map[row, col] > 0 and env.cost_map[row, col] > 0:
+                            color = "orange"
+                        elif env.reward_map[row, col] > 0:
+                            color = "green"
+                        elif env.cost_map[row, col] > 0:
+                            color = "red"
+
                         axs[0].text(
                             col,
                             row,
@@ -428,19 +456,10 @@ def main() -> None:
                             ha="center",
                             va="center",
                             color=color,
-                            fontsize=12,
+                            fontsize=11,
                             fontweight="bold",
                         )
 
-                # Cost Uncertainty as color, Cost as text
-                im1 = axs[1].imshow(cost_uncertainty, cmap="plasma")
-                axs[1].set_title("Cost (text), Cost Uncertainty (color)")
-                plt.colorbar(im1, ax=axs[1])
-                for row in range(grid_size):
-                    for col in range(grid_size):
-                        cval = cost_value[row, col]
-                        # Red if cost, else default
-                        color = "red" if env.cost_map[row, col] > 0 else "black"
                         axs[1].text(
                             col,
                             row,
@@ -448,7 +467,7 @@ def main() -> None:
                             ha="center",
                             va="center",
                             color=color,
-                            fontsize=12,
+                            fontsize=11,
                             fontweight="bold",
                         )
 
@@ -562,13 +581,12 @@ def main() -> None:
                 rewards_not_yet_observed_flag = False
                 log.update({"frames_to_first_reward": frames_to_first_reward})
 
-            if "safety" in config.env_class:
-                all_costs = states.costs.sum().item()
-                if costs_not_yet_observed_flag and all_costs > 0:
-                    frames_to_first_cost = frames + config.selfplay_batch_size * config.selfplay_steps
-                    print(f"Observed first cost after frames: {frames_to_first_cost}")
-                    costs_not_yet_observed_flag = False
-                    log.update({"frames_to_first_cost": frames_to_first_cost})
+            all_costs = states.costs.sum().item()
+            if costs_not_yet_observed_flag and all_costs > 0:
+                frames_to_first_cost = frames + config.selfplay_batch_size * config.selfplay_steps
+                print(f"Observed first cost after frames: {frames_to_first_cost}")
+                costs_not_yet_observed_flag = False
+                log.update({"frames_to_first_cost": frames_to_first_cost})
 
             if "safety" in config.env_class:
                 log.update(
@@ -583,6 +601,9 @@ def main() -> None:
                         "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
                         "mean_root_max_child_cost_epistemic_variance": q_cost_variances.max(axis=-1).mean().item(),
                         "observed_rewards": all_rewards,
+                        "observed_costs": all_costs,
+                        "exploration_beta_c": config.exploration_beta_c,
+                        "reanalyze_beta_c": config.reanalyze_beta_c,
                     }
                 )
             else:

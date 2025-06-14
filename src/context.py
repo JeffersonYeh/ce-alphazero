@@ -32,6 +32,7 @@ class Context(NamedTuple):
     hash_path: str
     exploration_beta: float
     max_ube: float
+    max_ube_cost: float
     weigh_losses: bool
     loss_weighting_temperature: float
     directed_exploration: bool
@@ -55,7 +56,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             num_actions=env.num_actions,
             num_channels=config.num_channels,
             max_ube=config.max_ube,
-            cost_threshold=env.cost_threshold,
+            max_ube_cost=config.max_ube_cost,
             discount=config.discount,
             hidden_layers_size=config.linear_layer_size,
             hash_class=hash_class,
@@ -160,7 +161,7 @@ def get_epistemic_recurrent_fn(
         batched_discount = jax.lax.cond(two_players_game, lambda: batched_discount * -1.0, lambda: batched_discount)  # type: ignore
         batched_discount = jnp.where(state.terminated, 0.0, batched_discount)
 
-        cost = state.costs[jnp.arange(state.rewards.shape[0]), current_player]
+        cost = state.costs[jnp.arange(state.costs.shape[0]), current_player]
         cost_value = jnp.where(state.terminated, 0.0, cost_value)
         cost_value_epistemic_variance = jnp.where(state.terminated, 0.0, cost_value_epistemic_variance)
 
@@ -174,7 +175,7 @@ def get_epistemic_recurrent_fn(
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             cost=cost,
             cost_epistemic_variance=jnp.zeros_like(
-                reward
+                cost
             ),  # NOTE: We have a known cost model, so we pass 0 cost uncertainty.
             cost_value=cost_value,
             cost_value_epistemic_variance=cost_value_epistemic_variance,

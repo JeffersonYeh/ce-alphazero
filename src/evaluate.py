@@ -19,7 +19,7 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
         states, _, _, _, counter = tup
         return jnp.logical_not(states.terminated.all()) & (counter <= config.max_episode_length)
 
-    def loop_fn(tup: tuple[pgx.State, PRNGKey, Array, Array, int]) -> tuple[pgx.State, PRNGKey, Array, int]:
+    def loop_fn(tup: tuple[pgx.State, PRNGKey, Array, Array, int]) -> tuple[pgx.State, PRNGKey, Array, Array, int]:
         states, rng_key, sum_of_rewards, sum_of_costs, counter = tup
         rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
 
@@ -43,23 +43,25 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
             beta_c=config.exploitation_beta_c * jnp.ones_like(value),  # type: ignore
             cost_value=cost_value,
             cost_value_epistemic_variance=cost_value_epistemic_variance,
-            cost_threshold=_cost_epistemic_variance,
+            cost_threshold=context.env.cost_threshold * jnp.ones_like(value),
         )
-        policy_output = emctx.epistemic_gumbel_muzero_policy(
+        policy_output = emctx.epistemic_muzero_policy(
             params=model,
             rng_key=key_for_search,
             root=root,
             recurrent_fn=context.evaluation_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
-            qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore
-            gumbel_scale=0.0,
+            # qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore
+            # gumbel_scale=0.0,
         )
         keys = jax.random.split(key_for_next_step, batch_size)
         next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
         rewards = next_states.rewards[jnp.arange(states.rewards.shape[0]), states.current_player]
-        costs = next_states.costs[jnp.arange(states.rewards.shape[0]), states.current_player]
+        costs = next_states.costs[jnp.arange(states.costs.shape[0]), states.current_player]
+
         counter = counter + 1
+
         return next_states, rng_key, sum_of_rewards + rewards, sum_of_costs + costs, counter
 
     rng_key, sub_key = jax.random.split(rng_key)

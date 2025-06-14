@@ -36,15 +36,15 @@ class Config(pydantic.BaseModel):
     # NOTE: This is effectively Cost_threshold for cost uncertainty and something like (upper bound):
     # NOTE: max_ube = V_max^2, where V_max = R_max * H and H is the horizon
     max_ube: float = 1.0  # Approx. max_value ** 2, used to bound the predictions of UBE
+    max_ube_cost: float = 1.0
+    # max_ube_cost: float = (max_episode_length * 1.0) ** 2  # Approx. max_cost ** 2, used to bound the predictions of UBE
     exploration_ube_target: bool = True  # If true, ube target is max_child_unc. Otherwise, it's chosen child's unc.
     # selfplay
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
     selfplay_simulations_per_step: int = 32
     selfplay_steps: int = 32
     directed_exploration: bool = False  # if true, betaExploration = 0 and uses exploitation policy in selfplay
-    safe_exploration: bool = (
-        False  # if false, betaCostExploration = 0 and it ignores safety constraints during exploration
-    )
+    safe_exploration: bool = True  # if false, betaCostExploration = 0
     # TODO: This effectively gives the default action selection for MCTS based on visitation counts at the root
     # TODO: If we want one of the other methods we need to consider how they interact with shielding
     sample_actions: bool = False
@@ -82,19 +82,20 @@ class Config(pydantic.BaseModel):
     exploration_beta_v: Annotated[float, pydantic.Field(strict=True, ge=0.0)] = (
         0.0  # used in selfplay in emctx for directed exploration
     )
-    exploration_beta_c: Annotated[float, pydantic.Field(strict=True, ge=0.0)] = (
-        -1.0  # used in selfplay in emctx for directed exploration
+    exploration_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
+        -100.0  # used in selfplay in emctx for directed exploration
     )
     exploitation_beta_v: Annotated[float, pydantic.Field(strict=True, le=0.0)] = 0.0  # used in evaluation in emctx
-    exploitation_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = -1.0  # used in evaluation in emctx
+    exploitation_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = 0.0  # used in evaluation in emctx
     reanalyze_beta_v: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
         0.0  # used in reanalyze in emctx for epistemically reliable targets
     )
     reanalyze_beta_c: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
-        -1.0  # used in reanalyze in emctx for epistemically reliable targets
+        -100.0  # used in reanalyze in emctx for epistemically reliable targets
     )
     beta_v_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
-    beta_c_schedule: bool = False
+    beta_c_schedule: bool = True
+    beta_c_schedule_timescale: int = 250
     # wandb and saving params
     results_path: str = "./evaluation_results"  # Defaults to an evaluation_results dir under src
     track: bool = True  # Whether to use WANDB or not. Disabled in debug

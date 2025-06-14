@@ -26,6 +26,7 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         num_channels: int = 16,
         hidden_layers_size: int = 64,
         max_ube: float = 1.0,
+        max_ube_cost: float = 1.0,
         cost_threshold: float = 1.0,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
@@ -50,7 +51,7 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
         self.max_u = max_ube
-        self.cost_threshold = cost_threshold
+        self.max_ube_cost = max_ube_cost
         discount = min(discount, 0.9997)
         self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount**2)
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
@@ -135,8 +136,7 @@ class ConstraintEpistemicMinatarAZNet(hk.Module):
             value_epistemic_variance=u * self.max_u,  # NOTE: V[value] is between 0 and v_max^2
             reward_epistemic_variance=scaled_state_novelty,
             cost_value=c,
-            cost_value_epistemic_variance=u
-            * (self.cost_threshold + 1) ** 2,  # NOTE: V[cost] is between 0 and cost_threshold^2
+            cost_value_epistemic_variance=u * self.max_ube_cost,  # NOTE: V[cost] is between 0 and max_cost^2
             cost_epistemic_variance=scaled_state_novelty,
         )
 

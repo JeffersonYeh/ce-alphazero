@@ -92,15 +92,44 @@ class SafetyMinAtarFreeway(core.Env):
 
         self.cost_threshold = COST_TRESHOLD
 
-    def step(self, state: core.State, action: Array, key: Optional[Array] = None) -> core.State:
-        assert key is not None, (
-            "v2.0.0 changes the signature of step. Please specify PRNGKey at the third argument:\n\n"
-            "  * <  v2.0.0: step(state, action)\n"
-            "  * >= v2.0.0: step(state, action, key)\n\n"
-            "See v2.0.0 release note for more details:\n\n"
-            "  https://github.com/sotetsuk/pgx/releases/tag/v2.0.0"
+    def step(
+        self,
+        state: State,
+        action: Array,
+        key: Optional[Array] = None,
+    ) -> State:
+        """Step function."""
+        is_illegal = ~state.legal_action_mask[action]
+        current_player = state.current_player
+
+        # If the state is already terminated or truncated, environment does not take usual step,
+        # but return the same state with zero-rewards for all players
+        state = jax.lax.cond(
+            (state.terminated | state.truncated),
+            lambda: state.replace(rewards=jnp.zeros_like(state.rewards), costs=jnp.zeros_like(state.costs)),  # type: ignore
+            lambda: self._step(state.replace(_step_count=state._step_count + 1), action, key),  # type: ignore
         )
-        return super().step(state, action, key)
+
+        # Taking illegal action leads to immediate game terminal with negative reward
+        state = jax.lax.cond(
+            is_illegal,
+            lambda: self._step_with_illegal_action(state, current_player),
+            lambda: state,
+        )
+
+        # All legal_action_mask elements are **TRUE** at terminal state
+        # This is to avoid zero-division error when normalizing action probability
+        # Taking any action at terminal state does not give any effect to the state
+        state = jax.lax.cond(
+            state.terminated,
+            lambda: state.replace(legal_action_mask=jnp.ones_like(state.legal_action_mask)),  # type: ignore
+            lambda: state,
+        )
+
+        observation = self.observe(state)
+        state = state.replace(observation=observation)  # type: ignore
+
+        return state
 
     def _init(self, key: PRNGKey) -> State:
         state = _init(rng=key)  # type: ignore
@@ -201,7 +230,6 @@ def _step_det(
     terminate_timer -= ONE
     terminal = terminate_timer < 0
 
-    # TODO: Watch out for this, it has now the cum_costs in it, could this be a problem in terms of how the state is represented in the NN/hash map, it should be the same state even with different cum_costs (its a property of the trajectory not of the state)
     next_state = state.replace(  # type: ignore
         _cars=cars,
         _pos=pos,
