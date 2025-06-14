@@ -212,7 +212,7 @@ class SafetyGrid(pgx.Env):
         # update termination
         new_terminated = (
             (state._step_count >= self.max_steps)
-            | (jnp.any(self.reward_locs == pos_flat_idx))
+            | (jnp.any(jnp.all(self.reward_locs == jnp.array([pos_r, pos_c]), axis=1)))
             | (new_cum_costs[0] > self.cost_threshold)
         )
         new_terminated = jnp.bool_(new_terminated)
