@@ -19,7 +19,7 @@ class Config(pydantic.BaseModel):
     # env_id: pgx.EnvId | str = "subleq-negation-positive"
     subleq_tasks: list[str] = pydantic.Field(default_factory=lambda: ["NEGATION_POSITIVE"])
     use_binary_encoding: bool = True  # only applies to subleq, vectors are in binary, if False then 1 hot
-    maximum_number_of_iterations: int = 2000
+    maximum_number_of_iterations: int = 200
     two_players_game: bool = False
     max_episode_length: int = 1000  # May want to change this per env
     # network
@@ -95,7 +95,7 @@ class Config(pydantic.BaseModel):
     )
     beta_v_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     beta_c_schedule: bool = True
-    beta_c_schedule_timescale: int = 250
+    beta_c_schedule_timescale: int = 100
     # wandb and saving params
     results_path: str = "./evaluation_results"  # Defaults to an evaluation_results dir under src
     track: bool = True  # Whether to use WANDB or not. Disabled in debug
