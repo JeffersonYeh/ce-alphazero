@@ -1,2 +1,4 @@
 [submodule "submodules/cemctx"]
 	path = submodules/cemctx
+	url = git@github.com:shirleyxindi/cemctx.git
+	branch = main
