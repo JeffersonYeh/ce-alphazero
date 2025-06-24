@@ -44,8 +44,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
     cost_value_loss = optax.l2_loss(cost_value, reanalyze_output.cost_value_target)
     # We scale the ube target by ube_scale, because ube pred. is between [0,1] for stability
-    # TODO: It should be value_epistemic_variance / config.max_ube, but thats the same for now
-    ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
+    ube_loss = optax.l2_loss(value_epistemic_variance / context.max_ube, reanalyze_output.ube_target)
     exploitation_policy_loss = optax.softmax_cross_entropy(
         exploitation_logits, reanalyze_output.exploitation_policy_target
     )
