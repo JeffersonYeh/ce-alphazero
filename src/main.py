@@ -109,10 +109,7 @@ def debug_deep_sea(all_states_batch, model, context):
     return ube_predictions, unseen_states
 
 
-def main() -> None:
-    # Get configuration from CLI.
-    config_dict = omegaconf.OmegaConf.from_cli()
-    config: Config = Config(**config_dict)  # type: ignore
+def main(config: Config) -> None:
     config: Config = setup_config(config)
 
     if config.env_class == "custom" and "deep_sea" in config.env_id:
@@ -360,7 +357,7 @@ def main() -> None:
                         # Create a blank state
                         state = env.init(jax.random.PRNGKey(0))
                         obs = jnp.zeros_like(state.observation)
-                        obs = obs.at[i, j].set(1)
+                        obs = obs.at[i, j].set(True)
                         state = state.replace(observation=obs)
                         all_states.append(state)
                 all_states = jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *all_states)
@@ -755,4 +752,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Get configuration from CLI.
+    config_dict = omegaconf.OmegaConf.from_cli()
+    config: Config = Config(**config_dict)  # type: ignore
+    main(config)
+    if config.track:
+        wandb.finish()

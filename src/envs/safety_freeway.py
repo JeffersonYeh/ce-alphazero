@@ -144,7 +144,7 @@ class SafetyMinAtarFreeway(core.Env):
             self.minimal_action_set[action],
             action,
         )
-        return _step(state, action, key, self.sticky_action_prob)  # type: ignore
+        return _step(state, action, key, self.sticky_action_prob, cost_threshold=self.cost_threshold)  # type: ignore
 
     def _observe(self, state: core.State, player_id: Array) -> Array:
         assert isinstance(state, State)
@@ -168,6 +168,7 @@ def _step(
     action: Array,
     key,
     sticky_action_prob,
+    cost_threshold,
 ):
     action = jnp.int32(action)
     key0, key1 = jax.random.split(key, 2)
@@ -177,7 +178,7 @@ def _step(
         lambda: action,
     )
     speeds, directions = _random_speed_directions(key1)
-    return _step_det(state, action, speeds=speeds, directions=directions)
+    return _step_det(state, action, speeds=speeds, directions=directions, cost_threshold=cost_threshold)
 
 
 def _init(rng: Array) -> State:
@@ -190,6 +191,7 @@ def _step_det(
     action: Array,
     speeds: Array,
     directions: Array,
+    cost_threshold: Array,
 ):
     cars = state._cars
     pos = state._pos
@@ -230,6 +232,14 @@ def _step_det(
     terminate_timer -= ONE
     terminal = terminate_timer < 0
 
+    # Cost cap condition
+    cum_costs = cum_costs + cost[jnp.newaxis]
+    terminal = jax.lax.cond(
+        jnp.all(cum_costs >= cost_threshold),
+        lambda: TRUE,
+        lambda: terminal,
+    )
+
     next_state = state.replace(  # type: ignore
         _cars=cars,
         _pos=pos,
@@ -237,7 +247,7 @@ def _step_det(
         _terminate_timer=terminate_timer,
         _terminal=terminal,
         _last_action=last_action,
-        _cum_costs=cum_costs + cost[jnp.newaxis],
+        _cum_costs=cum_costs,
         rewards=r[jnp.newaxis],
         costs=cost[jnp.newaxis],
         terminated=terminal,
